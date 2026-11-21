@@ -131,8 +131,9 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         for remaining in (0..pivots).rev() {
             let v = order.next_vertex();
             fill.clear();
-            let entries = graph.entries(v);
-            let column = clique.eliminate(draws, graph.neighbors(v), fill, sign);
+            let row = graph.neighbors(v);
+            let entries = row.len() as u32;
+            let column = clique.eliminate(draws, row, fill, sign);
             steps.push(v, column, slots);
             graph.eliminate_vertex(v);
             let mut search = FillSearch::new(entries, clique.neighbors().len(), remaining);

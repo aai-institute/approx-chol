@@ -12,36 +12,36 @@ pub(super) type Staged<T, I> = (I, I, T, u32);
 /// Whether a pivot's fill is searched for in the shorter of its ends' lists, so a duplicate merges into its pair and the degrees count it once.
 ///
 /// A search costs that list's length; an unmerged duplicate costs only a degree too high, which matters where it moves the order. Banded and fixest fill nearly always lands on a held pair (96-100%), the fronts it inflates then lose the order to fresh vertices (banded 55 PCG iterations instead of 14, fixest 5M 39 instead of 17); power-law and person × firm fill rarely does (2-20%) until the remainder is nearly complete, where searches cost their builds up to 4x.
+/// The ground edges a signed cancellation owes are the pivot's fill too, so they search under, and count toward, the same record.
 pub(super) struct FillSearch {
-    /// The pivot's entries: the least degree the order holds.
+    /// The pivot's stored entries; a list within twice them belongs to a vertex near the order's minimum.
     pivot_entries: u32,
     /// Its searches so far that found the pair, and that did not.
     found: u32,
     missed: u32,
-    /// Vertices left at most four times its degree: the remainder is nearly complete, so every order of it fills alike.
-    remainder_dense: bool,
+    /// More pivots left than four times its neighbors; at most that, the remainder is nearly complete and every order of it fills alike (2-4 measured alike, 8 cost bands 0.5-1.5 PCG iterations).
+    order_matters: bool,
 }
 
 impl FillSearch {
-    /// For the fill of a pivot holding `entries`, `degree` distinct neighbors, `remaining` vertices queued after it.
-    pub(super) fn new(entries: u32, degree: usize, remaining: usize) -> Self {
+    /// For the fill of a pivot holding `entries`, `neighbors` distinct, with `remaining` pivots left after it.
+    pub(super) fn new(entries: u32, neighbors: usize, remaining: usize) -> Self {
         Self {
             pivot_entries: entries,
             found: 0,
             missed: 0,
-            remainder_dense: remaining <= 4 * degree,
+            order_matters: remaining > 4 * neighbors,
         }
     }
 
     /// Whether a pair whose shorter list holds `shorter` entries is searched for.
     fn worth(&self, shorter: u32) -> bool {
         // Could its ends be pivoted soon? A degree too high would pass them over.
-        let competitive = shorter <= 2 * self.pivot_entries;
-        // Does this pivot's fill keep landing on held pairs? Three misses before any hit stop it; one stopped fixest's searches (40 PCG iterations instead of 17).
+        let competitive = shorter <= self.pivot_entries.saturating_mul(2);
+        // Does this pivot's fill keep landing on held pairs? Allowing one miss, fixest took 40 PCG iterations instead of 17; 2-4 measured alike.
         let paying_off = self.missed < 3 + 2 * self.found;
         // Does the order still matter? Not once the remainder is nearly complete.
-        let order_matters = !self.remainder_dense;
-        competitive && paying_off && order_matters
+        competitive && paying_off && self.order_matters
     }
 
     fn record(&mut self, found: bool) {
@@ -139,12 +139,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         self.degrees.get(v, self.lists.len(v))
     }
 
-    /// `v`'s stored entries, a duplicate each its own.
-    pub(super) fn entries(&self, v: usize) -> u32 {
-        self.lists.len(v)
-    }
-
-    pub(super) fn neighbors(&self, v: usize) -> impl Iterator<Item = (I, C, T)> + '_ {
+    pub(super) fn neighbors(&self, v: usize) -> impl ExactSizeIterator<Item = (I, C, T)> + '_ {
         self.lists.get(v).iter().map(|e| (e.to, e.copies, e.weight))
     }
 
@@ -368,10 +363,18 @@ mod tests {
         let search = FillSearch::new(4, 4, 100);
         assert!(search.worth(8) && !search.worth(9));
         let mut search = FillSearch::new(4, 4, 100);
-        (0..3).for_each(|_| search.record(false));
+        for _ in 0..3 {
+            assert!(search.worth(1));
+            search.record(false);
+        }
         assert!(!search.worth(1));
+        let mut search = FillSearch::new(4, 4, 100);
         search.record(true);
-        assert!(search.worth(1));
+        for _ in 0..5 {
+            assert!(search.worth(1));
+            search.record(false);
+        }
+        assert!(!search.worth(1));
         assert!(!FillSearch::new(4, 4, 16).worth(1) && FillSearch::new(4, 4, 17).worth(1));
     }
 
@@ -433,14 +436,15 @@ mod tests {
         check(Multi::split(4).expect("AC2"));
     }
 
-    /// Opposite duplicates cancel twice the smaller magnitude onto the ground at both ends, and a pair cancelled to zero leaves both lists.
+    /// Opposite duplicates cancel twice the smaller magnitude onto the ground at both ends, and a pair cancelled to zero leaves both lists; the owed ground edges search under the pivot's one record.
     #[test]
     fn signed_fill_cancels_onto_the_ground() {
         let sign = Signed { ground: 3u32 };
         let mut graph = EliminationGraph::<f64, u32, Single>::new();
         graph.reset(&[2; 4], Single);
-        graph.push_fill((0, 1, Single, 2.0), &mut searching(), Single, sign);
-        graph.push_fill((0, 1, Single, -0.5), &mut searching(), Single, sign);
+        let mut search = searching();
+        graph.push_fill((0, 1, Single, 2.0), &mut search, Single, sign);
+        graph.push_fill((0, 1, Single, -0.5), &mut search, Single, sign);
         let lists = |graph: &EliminationGraph<f64, u32, Single>, x| {
             graph
                 .neighbors(x)
@@ -449,9 +453,11 @@ mod tests {
         };
         assert_eq!(lists(&graph, 0), [(1, 1.5), (3, 1.0)]);
         assert_eq!(lists(&graph, 1), [(0, 1.5), (3, 1.0)]);
-        graph.push_fill((0, 1, Single, -1.5), &mut searching(), Single, sign);
+        graph.push_fill((0, 1, Single, -1.5), &mut search, Single, sign);
         assert_eq!(lists(&graph, 0), [(3, 4.0)]);
         assert_eq!(lists(&graph, 1), [(3, 4.0)]);
+        // One record: each push and owed ground edge searched; misses on the new pairs (0, 1), (0, 3), (1, 3), hits after.
+        assert_eq!((search.found, search.missed), (4, 3));
         graph.lists.assert_consistent();
     }
 
