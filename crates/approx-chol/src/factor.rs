@@ -28,7 +28,7 @@ use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
 pub(crate) use apply::Kernel;
 #[cfg(any(feature = "faer", feature = "ndarray"))]
 pub(crate) use apply::Slices;
-use apply::{rows_error, Room, Stack};
+use apply::{rows_error, Stack};
 use block_elimination::BlockElimination;
 use cholesky::{Cholesky, Workspace};
 use schur::BipartiteBlock;
@@ -36,14 +36,6 @@ use sdd::{Route, Sdd};
 
 /// `log₂` of the multiply-adds a block elimination's task carries, below which a split costs more than it saves.
 const MULTIPLY_ADD_GRAIN_BITS: u32 = 17;
-
-/// `count` slots of `V` on a stack; none asks no alignment either, so any stack serves a solve that takes none.
-fn slots<V>(count: usize) -> StackReq {
-    match count {
-        0 => StackReq::EMPTY,
-        count => StackReq::new::<V>(count),
-    }
-}
 
 /// Block-diagonal approximate inverse of the factored matrix, `A` or its [complement](crate::factorize_complement) numbered by the kept side: one [`Component`] per irreducible block of `A`.
 #[derive(Clone, Debug)]
@@ -95,7 +87,7 @@ macro_rules! on {
 // Below `on!`: a macro_rules macro is visible only to modules declared after it.
 mod build;
 mod spread;
-use spread::Coupled;
+use spread::{Coupled, Room};
 
 impl<T: Real> ApproxInverse<T> {
     /// Factors every coupled summand in parallel, each keyed by its vertices once they are `order`'s.

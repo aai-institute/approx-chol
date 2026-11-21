@@ -1,6 +1,6 @@
 //! Blocks of right-hand sides an [`ApproxInverse`] applies to, and how each reaches the solve.
 
-use super::spread::Spread;
+use super::spread::Room;
 use super::ApproxInverse;
 use crate::threads::ONE;
 use crate::{Batch, MemBuffer, MemStack, Real, StackReq, Threads};
@@ -317,29 +317,7 @@ impl<T: Real, C: AsRef<[T]> + AsMut<[T]>> Slices<T> for Columns<'_, C> {
     }
 }
 
-/// What a solve at a budget takes from the stack, from which each path's need follows.
-pub(super) struct Room {
-    /// A column of the operator's rows.
-    pub(super) column: StackReq,
-    /// Per lane, the most a block past the budget's share takes alone.
-    pub(super) alone: StackReq,
-    /// Per lane, the most one of the others takes, on each thread solving them at once.
-    pub(super) region: StackReq,
-    /// Threads solving the others at once.
-    pub(super) regions: usize,
-}
-
 impl Room {
-    pub(super) fn of<T: Real>(inverse: &ApproxInverse<T>, threads: Threads) -> Self {
-        Spread::of(inverse, threads).room(inverse)
-    }
-
-    /// Rows of `lanes` right-hand sides each, solved where they are.
-    pub(super) fn in_place(&self, lanes: usize) -> StackReq {
-        let regions = self.region.array(lanes).array(self.regions);
-        self.alone.array(lanes).or(regions)
-    }
-
     /// A block of `columns` columns whose slices fill its packs, a column alone solved where it is.
     pub(super) fn copied(&self, columns: usize) -> StackReq {
         by_width(columns, Copied(self))
