@@ -42,8 +42,9 @@ pub(super) struct Lists<E, I> {
 /// A release compacts once more than `1/RELEASE_DEAD` of the slab is dead: at ¼ or ⅛, dense worker-firm 1M built 4% and 11% slower.
 const RELEASE_DEAD: usize = 2;
 
-/// Growth past capacity compacts first if at least `1/GROWTH_DEAD` of the slab is dead, else reserves: a reserve copies while
-/// holding both slabs, and compacting at 1/16 rather than ¼ took a random degree-10 1M build's macOS peak footprint 938 → 452 MiB.
+/// Growth past capacity compacts first if at least `1/GROWTH_DEAD` of the slab is dead and that spares the reserve, which may copy
+/// the slab while both allocations stand: 1/16 rather than ¼ took random degree-10 1M's macOS peak footprint 938 → 452 MiB, for
+/// +1.7% instructions on lowmob panels.
 const GROWTH_DEAD: usize = 16;
 
 /// The slab grows, and shrinks to, `1/HEADROOM` past its length: doubling it measured +70% counted peak on grids.
@@ -153,20 +154,22 @@ impl<E: Copy, I: Index> Lists<E, I> {
         let cap = self.spans[l].cap;
         let room = cap.saturating_mul(2).max(4);
         assert!(room > cap, "a list exceeds u32 slots");
-        let past = self.slab.len() + room as usize > self.slab.capacity();
-        if past && GROWTH_DEAD * self.dead >= self.slab.len() {
+        // The slab's last run grows where it is: no copy, and no dead run left behind.
+        let last = |lists: &Self| {
+            lists.spans[l]
+                .run
+                .is_some_and(|r| r.get() == lists.runs.len())
+        };
+        let more = |last: bool| if last { room - cap } else { room } as usize;
+        let (spare, need) = (self.slab.capacity() - self.slab.len(), more(last(self)));
+        // Compacting pays only where it spares the reserve; one that can't would copy the slab twice.
+        if spare < need && GROWTH_DEAD * self.dead >= self.slab.len() && spare + self.dead >= need {
             self.compact();
         }
-        let Span {
-            start,
-            run: own,
-            len,
-            ..
-        } = self.spans[l];
+        let Span { start, len, .. } = self.spans[l];
         let at = self.slab.len();
-        // The slab's last run grows where it is: no copy, and no dead run left behind.
-        let last = own.is_some_and(|r| r.get() == self.runs.len());
-        let more = if last { room - cap } else { room } as usize;
+        let last = last(self);
+        let more = more(last);
         if self.slab.capacity() - at < more {
             self.slab.reserve_exact((at / HEADROOM).max(more));
         }
@@ -285,6 +288,25 @@ mod tests {
         lists.release(0);
         assert_eq!(lists.get(0), &[] as &[u32]);
         lists.assert_consistent();
+    }
+
+    /// The proptest's slabs stay small, where any dead run triggers compaction; here one moves past a dead run as the slab reserves.
+    #[test]
+    fn a_list_moves_past_a_dead_run_as_the_slab_reserves() {
+        let mut lists = Lists::<u32, u32>::new();
+        load(&mut lists, &[4; 8]);
+        let mut want = vec![Vec::new(); 8];
+        for l in [0, 1] {
+            for e in 0..5 {
+                lists.push(l, 10 * l as u32 + e);
+                want[l].push(10 * l as u32 + e);
+            }
+            lists.assert_consistent();
+        }
+        assert!(lists.dead > 0, "list 0's old run is still in the slab");
+        for (l, v) in want.iter().enumerate() {
+            assert_eq!(lists.get(l), &v[..], "list {l}");
+        }
     }
 
     proptest! {
