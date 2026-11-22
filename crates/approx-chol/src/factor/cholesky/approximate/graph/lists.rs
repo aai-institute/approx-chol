@@ -42,8 +42,9 @@ pub(super) struct Lists<E, I> {
 /// A release compacts once more than `1/RELEASE_DEAD` of the slab is dead: at ¼ or ⅛, dense worker-firm 1M built 4% and 11% slower.
 const RELEASE_DEAD: usize = 2;
 
-/// Growth past capacity compacts first if at least `1/GROWTH_DEAD` of the slab is dead, else reserves.
-const GROWTH_DEAD: usize = 4;
+/// Growth past capacity compacts first if at least `1/GROWTH_DEAD` of the slab is dead, else reserves: a reserve copies while
+/// holding both slabs, and compacting at 1/16 rather than ¼ took a random degree-10 1M build's macOS peak footprint 938 → 452 MiB.
+const GROWTH_DEAD: usize = 16;
 
 /// The slab grows, and shrinks to, `1/HEADROOM` past its length: doubling it measured +70% counted peak on grids.
 const HEADROOM: usize = 4;
