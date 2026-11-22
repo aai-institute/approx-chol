@@ -294,7 +294,8 @@ mod tests {
     fn a_last_run_grows_in_place_without_compacting() {
         let mut lists = Lists::<u32, u32>::new();
         load(&mut lists, &[4; 8]);
-        lists.release(0);
+        // A quarter dead, so even `1/4` compacted on the whole room.
+        (0..2).for_each(|l| lists.release(l));
         lists.slab.reserve_exact(4);
         let spare = lists.slab.capacity() - lists.slab.len();
         assert!(
@@ -302,7 +303,7 @@ mod tests {
             "room for the in-place growth only: {spare}"
         );
         (0..5).for_each(|e| lists.push(7, e));
-        assert_eq!((lists.dead, lists.get(7)), (4, &[0, 1, 2, 3, 4][..]));
+        assert_eq!((lists.dead, lists.get(7)), (8, &[0, 1, 2, 3, 4][..]));
         lists.assert_consistent();
     }
 
