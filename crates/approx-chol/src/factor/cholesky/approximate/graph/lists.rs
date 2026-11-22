@@ -42,9 +42,9 @@ pub(super) struct Lists<E, I> {
 /// A release compacts once more than `1/RELEASE_DEAD` of the slab is dead: at ¼ or ⅛, dense worker-firm 1M built 4% and 11% slower.
 const RELEASE_DEAD: usize = 2;
 
-/// Growth past capacity compacts first if at least `1/GROWTH_DEAD` of the slab is dead and that spares the reserve, which may copy
-/// the slab while both allocations stand: 1/16 rather than ¼ took random degree-10 1M's macOS peak footprint 938 → 452 MiB, for
-/// +1.7% instructions on lowmob panels.
+/// Growth past capacity compacts first if at least `1/GROWTH_DEAD` of the slab is dead, else reserves, which may copy the slab
+/// while both allocations stand: 1/16 rather than ¼ took random degree-10 1M's macOS peak footprint 938 → 452 MiB, for +1.7–2%
+/// instructions on lowmob panels.
 const GROWTH_DEAD: usize = 16;
 
 /// The slab grows, and shrinks to, `1/HEADROOM` past its length: doubling it measured +70% counted peak on grids.
@@ -162,8 +162,7 @@ impl<E: Copy, I: Index> Lists<E, I> {
         };
         let more = |last: bool| if last { room - cap } else { room } as usize;
         let (spare, need) = (self.slab.capacity() - self.slab.len(), more(last(self)));
-        // Compacting pays only where it spares the reserve; one that can't would copy the slab twice.
-        if spare < need && GROWTH_DEAD * self.dead >= self.slab.len() && spare + self.dead >= need {
+        if spare < need && GROWTH_DEAD * self.dead >= self.slab.len() {
             self.compact();
         }
         let Span { start, len, .. } = self.spans[l];
@@ -290,23 +289,21 @@ mod tests {
         lists.assert_consistent();
     }
 
-    /// The proptest's slabs stay small, where any dead run triggers compaction; here one moves past a dead run as the slab reserves.
+    /// A last run grows in place by `room - cap`; a grow tested against its whole room compacted for nothing.
     #[test]
-    fn a_list_moves_past_a_dead_run_as_the_slab_reserves() {
+    fn a_last_run_grows_in_place_without_compacting() {
         let mut lists = Lists::<u32, u32>::new();
         load(&mut lists, &[4; 8]);
-        let mut want = vec![Vec::new(); 8];
-        for l in [0, 1] {
-            for e in 0..5 {
-                lists.push(l, 10 * l as u32 + e);
-                want[l].push(10 * l as u32 + e);
-            }
-            lists.assert_consistent();
-        }
-        assert!(lists.dead > 0, "list 0's old run is still in the slab");
-        for (l, v) in want.iter().enumerate() {
-            assert_eq!(lists.get(l), &v[..], "list {l}");
-        }
+        lists.release(0);
+        lists.slab.reserve_exact(4);
+        let spare = lists.slab.capacity() - lists.slab.len();
+        assert!(
+            (4..8).contains(&spare),
+            "room for the in-place growth only: {spare}"
+        );
+        (0..5).for_each(|e| lists.push(7, e));
+        assert_eq!((lists.dead, lists.get(7)), (4, &[0, 1, 2, 3, 4][..]));
+        lists.assert_consistent();
     }
 
     proptest! {
