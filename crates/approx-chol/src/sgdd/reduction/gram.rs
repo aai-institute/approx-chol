@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
-use super::{rows_where, Folded, Settling, Surplus};
+use super::{rows_where, Folded, NullRounding, Settling, Surplus};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Grounding, IrreducibleBlock};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Cut, SymmetricBlock};
@@ -94,8 +94,8 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
         })
     }
 
-    fn shifts(&self, folded: &Folded<'_, T, I>) -> Option<Vec<f64>> {
-        folded.null_shifts(|| &self.rho[..])
+    fn rounding(&self, folded: &Folded<'_, T, I>) -> Option<NullRounding> {
+        folded.null_rounding(|| &self.rho[..])
     }
 
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).

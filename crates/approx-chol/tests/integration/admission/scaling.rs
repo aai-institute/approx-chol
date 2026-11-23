@@ -320,8 +320,8 @@ fn a_ground_is_kept_only_past_its_tracked_band(
             (t + 1, 64.0 * f64::EPSILON)
         }
         Beside::Stated | Beside::Pendant => {
-            if let Some(pendant) = x.get_mut(n) {
-                *pendant *= 2f64.powi(400);
+            if matches!(beside, Beside::Pendant) {
+                x[n] *= 2f64.powi(400);
                 y[n] *= 2f64.powi(400);
             }
             (
