@@ -712,10 +712,15 @@ mod tests {
     }
 
     /// A phased block's steps and pin, hashed bit for bit.
-    fn phased_bits<C: Copies>(m: Sdd<f64, u32>, copies: Option<Multi>) -> u64 {
+    fn phased_bits<C: Copies>(
+        m: Sdd<f64, u32>,
+        copies: Option<Multi>,
+        tail: Option<FactorTail<'_, f64>>,
+    ) -> u64 {
         let room = EliminationGraph::<f64, u32, C>::room(&m);
+        let never = m.ground().or(m.gauge(tail));
         assert!(
-            LocalMinima::of(&m, &room, m.ground()).is_some(),
+            LocalMinima::of(&m, &room, never).is_some(),
             "the phase fires"
         );
         let (mut elimination, draws) = (
@@ -724,8 +729,8 @@ mod tests {
         );
         let ground = m.n() as u32;
         let (steps, pinned) = match m.layout() {
-            Layout::Signed => elimination.eliminate(m, Signed { ground }, draws, None),
-            _ => elimination.eliminate(m, Unsigned, draws, None),
+            Layout::Signed => elimination.eliminate(m, Signed { ground }, draws, tail),
+            _ => elimination.eliminate(m, Unsigned, draws, tail),
         };
         let headers = (steps.headers.iter()).flat_map(|h| {
             [
@@ -742,23 +747,28 @@ mod tests {
         })
     }
 
-    /// A block whose local minima pivot first keeps every bit of its factor, AC and AC2, floating, grounded and signed, as built before the phase's rows became its columns in place and the graph past it numbered only the vertices left (a8ec5cbb).
+    /// A block whose local minima pivot first keeps every bit of its factor, AC and AC2, floating, grounded, signed, and gauged where `F` spans wide, as built before the phase's rows became its columns in place and the graph past it numbered only the vertices left (a8ec5cbb).
     #[test]
     fn a_phased_block_factors_as_it_did() {
         let mut have = Vec::new();
-        for (grounded, layout) in [
-            (false, Layout::Like),
-            (true, Layout::Like),
-            (true, Layout::Signed),
+        // Its gauge person 777, renumbered past the local minima below it.
+        let f: Vec<f64> = (0..1560)
+            .map(|v| if v == 777 { 1.0 } else { 1e-9 })
+            .collect();
+        for (grounded, layout, tail) in [
+            (false, Layout::Like, None),
+            (true, Layout::Like, None),
+            (true, Layout::Signed, None),
+            (false, Layout::Like, Some(FactorTail::of(&f))),
         ] {
             let m = || panel(1500, 60, grounded, layout);
-            have.push(phased_bits::<Single>(m(), None));
+            have.push(phased_bits::<Single>(m(), None, tail));
             // At 64 copies the order's key budget binds, so its buckets scale with the vertices counted.
             for copies in [2, 64] {
-                have.push(phased_bits::<Multi>(m(), Multi::split(copies)));
+                have.push(phased_bits::<Multi>(m(), Multi::split(copies), tail));
             }
         }
-        let want: [u64; 9] = [
+        let want: [u64; 12] = [
             0x387e_0f96_6cf8_4f25,
             0x8f70_43e5_a5cc_f19b,
             0x4a17_5e81_b969_5a12,
@@ -768,6 +778,9 @@ mod tests {
             0x77e5_2100_21e6_803e,
             0xd155_9957_b8ac_2617,
             0x7364_72c2_674b_0d16,
+            0x9b45_9ca5_b2ff_7444,
+            0xc2f2_8d3b_a85f_3dc2,
+            0x47e1_d284_6dfc_aa02,
         ];
         assert_eq!(have, want, "{have:#x?}");
     }
