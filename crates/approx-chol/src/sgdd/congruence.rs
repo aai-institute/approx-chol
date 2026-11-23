@@ -50,6 +50,14 @@ impl<T: Real> FactorTail<'_, T> {
     }
 }
 
+#[cfg(test)]
+impl<'f, T> FactorTail<'f, T> {
+    /// `f` as a block's whole tail.
+    pub(crate) fn of(f: &'f [T]) -> Self {
+        Self(f)
+    }
+}
+
 /// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
 fn largest<T: Real>(f: &[T]) -> usize {
     argmax(f, T::abs)

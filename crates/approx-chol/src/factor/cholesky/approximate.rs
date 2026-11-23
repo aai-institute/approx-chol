@@ -83,33 +83,59 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         let first = (n > PHASED_FROM)
             .then(|| LocalMinima::of(&m, &room, never))
             .flatten();
-        // Every vertex left but one: the never-pivoted one, or the order's last.
-        let pivots = first.as_ref().map_or(n, |first| first.left) - 1;
-        let mut steps = match &first {
+        let (mut steps, left) = match first {
             None => {
                 self.graph.load(&m, &room, self.copies);
                 drop((m, room));
-                ApproximateCholesky::with_capacity(n, 0)
+                let steps = ApproximateCholesky::with_capacity(n, 0);
+                self.pivot_rest(steps, (never, n), sign, &mut draws, slots)
             }
-            Some(first) => self.pivot_first((m, room), first, sign, &mut draws, slots),
+            Some(first) => {
+                let steps = self.pivot_first((m, room), &first, sign, &mut draws, slots);
+                // The graph left numbers the vertices left by `first`'s ids, which keep their order, so the ground stays past the slots.
+                let from = steps.ends();
+                let mut vertices = Vec::with_capacity(first.left);
+                vertices.extend((0..n).filter(|&v| !first.gone(v)).map(I::from_index));
+                let (never, sign) = (
+                    never.map(|v| first.id(I::from_index(v))),
+                    sign.renumbered(|g| I::from_index(first.id(g))),
+                );
+                let slots = slots - (n - first.left);
+                drop(first);
+                let (mut steps, left) = self.pivot_rest(steps, (never, n), sign, &mut draws, slots);
+                steps.renumber(from, |v| vertices[v.index()]);
+                (steps, vertices[left].index())
+            }
         };
-        let edge_ends = self.graph.edge_ends();
-        let queue = |v| Some(v) != never && !first.as_ref().is_some_and(|first| first.gone(v));
-        self.order.load(&self.graph, self.copies, queue, edge_ends);
-        drop(first);
-        steps.neighbors.reserve_exact(edge_ends);
-        steps.coefficients.reserve_exact(edge_ends);
-        self.pivot_all(&mut draws, &mut steps, slots, sign, pivots);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
-        let pinned = ground
-            .is_none()
-            .then(|| gauge.unwrap_or_else(|| self.order.next_vertex()));
+        let pinned = ground.is_none().then_some(left);
         if n > REUSED_UP_TO {
             *self = Self::new(self.copies);
         }
         (steps, pinned)
+    }
+
+    /// The graph's vertices in minimum-degree order but `never`, or the order's last, keys scaled for `scale_n` vertices; returns the steps and the vertex left.
+    fn pivot_rest<S: Sign<T, I>>(
+        &mut self,
+        mut steps: ApproximateCholesky<T, I>,
+        (never, scale_n): (Option<usize>, usize),
+        sign: S,
+        draws: &mut Xoshiro256PlusPlus,
+        slots: usize,
+    ) -> (ApproximateCholesky<T, I>, usize) {
+        let pivots = self.graph.n() - 1;
+        let edge_ends = self.graph.edge_ends();
+        let queue = |v| Some(v) != never;
+        self.order
+            .load(&self.graph, self.copies, queue, edge_ends, scale_n);
+        steps.neighbors.reserve_exact(edge_ends);
+        steps.coefficients.reserve_exact(edge_ends);
+        self.pivot_all(draws, &mut steps, slots, sign, pivots);
+        let left = never.unwrap_or_else(|| self.order.next_vertex());
+        (steps, left)
     }
 
     #[inline(never)] // Inlined, its codegen moves with the buffer handling: grids +1-3%.
@@ -162,27 +188,40 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         for v in 1..n {
             start[v + 1] = start[v] + row(v - 1);
         }
-        let mut rows = vec![(I::from_index(0), T::zero()); start[n] + row(n - 1)];
+        let entries = start[n] + row(n - 1);
+        let (mut to, mut weights) = (vec![I::from_index(0); entries], vec![T::zero(); entries]);
         drop(room);
         let mut staged = Vec::new();
         m.grounded_edges(|k, j, w| {
-            let (row, to) = match (first.gone(k.index()), first.gone(j.index())) {
+            let (row, other) = match (first.gone(k.index()), first.gone(j.index())) {
                 (true, _) => (k, j),
                 (_, true) => (j, k),
                 _ => return staged.push((k, j, split, w)),
             };
-            rows[start[row.index() + 1]] = (to, w);
-            start[row.index() + 1] += 1;
+            let at = &mut start[row.index() + 1];
+            (to[*at], weights[*at]) = (other, w);
+            *at += 1;
         });
         drop(m);
-        let mut steps = ApproximateCholesky::with_capacity(n, rows.len());
-        let mut merged = staged.len();
+        // The rows become the steps: each column is written over its own row, which it never outgrows.
+        let mut steps = ApproximateCholesky {
+            neighbors: to,
+            coefficients: weights,
+            ..ApproximateCholesky::with_capacity(n, 0)
+        };
+        let (mut written, mut merged) = (0, staged.len());
         let Self { clique, fill, .. } = self;
         for v in (0..n).filter(|&v| first.gone(v)) {
-            let row = rows[start[v]..start[v + 1]].iter();
+            let row = (start[v]..start[v + 1])
+                .map(|k| (steps.neighbors[k], split, steps.coefficients[k]));
             fill.clear();
-            let column = clique.eliminate(draws, row.map(|&(u, w)| (u, split, w)), fill, sign);
-            steps.push(v, column, slots);
+            let d = clique.pivot(draws, row, fill, sign);
+            steps.write(v, (d, clique.shares(d)), slots, |steps, neighbor, share| {
+                (steps.neighbors[written], steps.coefficients[written]) = (neighbor, share);
+                written += 1;
+            });
+            // Later minima still read the rows past it: `refill` never returns more entries than the row it reads.
+            debug_assert!(written <= start[v + 1], "column {v} outgrows its row");
             staged.extend_from_slice(fill);
             // So past 2^16 pairs the staging stays within twice its merged size.
             if staged.len() >= (2 * merged).max(1 << 16) {
@@ -190,9 +229,17 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
                 merged = staged.len();
             }
         }
-        drop((rows, start));
+        steps.neighbors.truncate(written);
+        steps.coefficients.truncate(written);
+        drop(start);
         merge_pairs(&mut staged, first, split, sign);
-        self.graph.load_merged(&staged, |v| first.gone(v), n, split);
+        for pair in &mut staged {
+            (pair.0, pair.1) = (
+                I::from_index(first.id(pair.0)),
+                I::from_index(first.id(pair.1)),
+            );
+        }
+        self.graph.load_merged(&staged, first.left, split);
         steps
     }
 }
@@ -386,22 +433,46 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
     }
 
-    /// Each share `w/d` and `D⁻¹` rounded once from `f64`: no share is derived from the others, so none cancels (#275, #302); only `M`'s `slots` take one, not the ground past them.
-    fn push(
+    /// Where the steps end: their headers, and their entries.
+    fn ends(&self) -> (usize, usize) {
+        (self.headers.len(), self.neighbors.len())
+    }
+
+    /// The steps past `from` renumbered by `vertex`, pivots and neighbors.
+    fn renumber(&mut self, (headers, entries): (usize, usize), vertex: impl Fn(I) -> I) {
+        for header in &mut self.headers[headers..] {
+            header.vertex = vertex(header.vertex);
+        }
+        for neighbor in &mut self.neighbors[entries..] {
+            *neighbor = vertex(*neighbor);
+        }
+    }
+
+    /// The column's step, its entries appended.
+    fn push(&mut self, vertex: usize, column: (f64, impl Iterator<Item = (I, f64)>), slots: usize) {
+        self.write(vertex, column, slots, |steps, neighbor, share| {
+            steps.neighbors.push(neighbor);
+            steps.coefficients.push(share);
+        });
+    }
+
+    /// The column's step, each entry stored by `put`: each share `w/d` and `D⁻¹` rounded once from `f64`, so no share is derived from the others and none cancels (#275, #302); only `M`'s `slots` take one, not the ground past them.
+    fn write(
         &mut self,
         vertex: usize,
         (d, shares): (f64, impl Iterator<Item = (I, f64)>),
         slots: usize,
+        mut put: impl FnMut(&mut Self, I, T),
     ) {
-        let start = self.neighbors.len();
+        let mut len = 0;
         for (neighbor, share) in shares.filter(|&(j, _)| j.index() < slots) {
-            self.neighbors.push(neighbor);
-            self.coefficients.push(narrow(share));
+            put(self, neighbor, narrow(share));
+            len += 1;
         }
         // Finite, as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
-            len: I::from_index(self.neighbors.len() - start),
+            len: I::from_index(len),
             inverse_degree: narrow(1.0 / d),
         });
     }
@@ -541,8 +612,8 @@ mod tests {
         }
     }
 
-    /// `people` joined to two or three of `firms`, plus random person–person edges, so ties and neighboring minima occur; grounded at every tenth person when `grounded`.
-    fn panel(people: usize, firms: usize, grounded: bool) -> Sdd<f64, u32> {
+    /// `people` joined to two or three of `firms`, plus random person–person edges, so ties and neighboring minima occur, weighed in `[1/2, 2)`, signed at random under [`Layout::Signed`]; grounded at every tenth person when `grounded`.
+    fn panel(people: usize, firms: usize, grounded: bool, layout: Layout) -> Sdd<f64, u32> {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(11);
         let n = people + firms;
         let mut pairs: Vec<(usize, usize)> = Vec::new();
@@ -564,7 +635,15 @@ mod tests {
             indices.extend((pairs.iter()).filter(|p| p.0 == i).map(|p| p.1 as u32));
             ptrs.push(indices.len());
         }
-        let values = vec![-1.0; indices.len()];
+        let values = (indices.iter())
+            .map(|_| {
+                let w = 0.5 + rng.random::<f64>() * 1.5;
+                match layout == Layout::Signed && rng.random() {
+                    true => w,
+                    false => -w,
+                }
+            })
+            .collect();
         let surplus = (0..n)
             .map(|v| {
                 if grounded && v < people && v % 10 == 0 {
@@ -575,14 +654,14 @@ mod tests {
             })
             .collect();
         let adjacency = UpperAdjacency::new(Rows::new(ptrs, indices, values, n));
-        Sdd::new(adjacency, Grounding::of(surplus), Layout::Like)
+        Sdd::new(adjacency, Grounding::of(surplus), layout)
     }
 
     /// The set holds no edge, each member's `(degree, id)` below its neighbors' but `never`'s, every vertex so placed is in it, and `never` is not.
     #[test]
     fn local_minima_are_an_independent_set_without_never() {
         for grounded in [false, true] {
-            let m = panel(1500, 60, grounded);
+            let m = panel(1500, 60, grounded, Layout::Like);
             let room = EliminationGraph::<f64, u32, Single>::room(&m);
             let mut adjacent = vec![Vec::new(); m.n()];
             for i in 0..m.n() {
@@ -616,6 +695,159 @@ mod tests {
                 }
                 let left = (0..room.len()).filter(|&v| !first.gone(v)).count();
                 assert_eq!(first.left, left, "{label}");
+            }
+        }
+    }
+
+    /// A phased block's steps and pin, hashed bit for bit.
+    fn phased_bits<C: Copies>(
+        m: Sdd<f64, u32>,
+        copies: Option<Multi>,
+        tail: Option<FactorTail<'_, f64>>,
+    ) -> u64 {
+        let room = EliminationGraph::<f64, u32, C>::room(&m);
+        let never = m.ground().or(m.gauge(tail));
+        assert!(
+            LocalMinima::of(&m, &room, never).is_some(),
+            "the phase fires"
+        );
+        let (mut elimination, draws) = (
+            CliqueTreeElimination::new(copies),
+            Xoshiro256PlusPlus::seed_from_u64(7),
+        );
+        let ground = m.n() as u32;
+        let (steps, pinned) = match m.layout() {
+            Layout::Signed => elimination.eliminate(m, Signed { ground }, draws, tail),
+            _ => elimination.eliminate(m, Unsigned, draws, tail),
+        };
+        let headers = (steps.headers.iter()).flat_map(|h| {
+            [
+                u64::from(h.vertex),
+                u64::from(h.len),
+                h.inverse_degree.to_bits(),
+            ]
+        });
+        let words = (headers.chain(steps.neighbors.iter().map(|&j| u64::from(j))))
+            .chain(steps.coefficients.iter().map(|c| c.to_bits()))
+            .chain(pinned.map(|p| p as u64));
+        words.fold(0xcbf2_9ce4_8422_2325, |h, w| {
+            (h ^ w).wrapping_mul(0x100_0000_01b3)
+        })
+    }
+
+    /// A block whose local minima pivot first keeps every bit of its factor, AC and AC2, floating, grounded, signed, and gauged where `F` spans wide, as built before the phase's rows became its columns in place and the graph past it numbered only the vertices left (a8ec5cbb).
+    #[test]
+    fn a_phased_block_factors_as_it_did() {
+        let mut have = Vec::new();
+        // Its gauge person 777, renumbered past the local minima below it.
+        let f: Vec<f64> = (0..1560)
+            .map(|v| if v == 777 { 1.0 } else { 1e-9 })
+            .collect();
+        for (grounded, layout, tail) in [
+            (false, Layout::Like, None),
+            (true, Layout::Like, None),
+            (true, Layout::Signed, None),
+            (false, Layout::Like, Some(FactorTail::of(&f))),
+        ] {
+            let m = || panel(1500, 60, grounded, layout);
+            have.push(phased_bits::<Single>(m(), None, tail));
+            // At 64 copies the order's key budget binds, so its buckets scale with the vertices counted.
+            for copies in [2, 64] {
+                have.push(phased_bits::<Multi>(m(), Multi::split(copies), tail));
+            }
+        }
+        let want: [u64; 12] = [
+            0x387e_0f96_6cf8_4f25,
+            0x8f70_43e5_a5cc_f19b,
+            0x4a17_5e81_b969_5a12,
+            0x5660_9c9d_92c3_16c1,
+            0x6bb1_77de_9f92_2205,
+            0x6852_3368_cb7a_4b97,
+            0x77e5_2100_21e6_803e,
+            0xd155_9957_b8ac_2617,
+            0x7364_72c2_674b_0d16,
+            0x9b45_9ca5_b2ff_7444,
+            0xc2f2_8d3b_a85f_3dc2,
+            0x47e1_d284_6dfc_aa02,
+        ];
+        assert_eq!(have, want, "{have:#x?}");
+    }
+
+    /// A tree on `n` vertices, `edges` weighed in `[1/2, 3/2)`, its surplus `1` at `grounded`; and `x ↦ M x`.
+    fn tree(
+        n: usize,
+        edges: &[(usize, usize)],
+        grounded: &[usize],
+    ) -> (Sdd<f64, u32>, impl Fn(&[f64]) -> Vec<f64>) {
+        let weight = |a: usize, b: usize| 0.5 + ((31 * a + 17 * b) % 100) as f64 / 100.0;
+        let mut upper: Vec<_> = edges.iter().map(|&(a, b)| (a.min(b), a.max(b))).collect();
+        upper.sort_unstable();
+        let (mut ptrs, mut indices, mut values) = (vec![0], vec![], vec![]);
+        for i in 0..n {
+            for &(_, j) in upper.iter().filter(|e| e.0 == i) {
+                indices.push(j as u32);
+                values.push(-weight(i, j));
+            }
+            ptrs.push(indices.len());
+        }
+        let surplus: Vec<f64> = (0..n)
+            .map(|v| f64::from(u8::from(grounded.contains(&v))))
+            .collect();
+        let adjacency = UpperAdjacency::new(Rows::new(ptrs, indices, values, n));
+        let m = Sdd::new(adjacency, Grounding::of(surplus.clone()), Layout::Like);
+        let apply = move |x: &[f64]| {
+            let mut y: Vec<f64> = (0..n).map(|v| surplus[v] * x[v]).collect();
+            for &(a, b) in &upper {
+                let flow = weight(a, b) * (x[a] - x[b]);
+                y[a] += flow;
+                y[b] -= flow;
+            }
+            y
+        };
+        (m, apply)
+    }
+
+    /// A tree factors exactly, as no pivot meets three neighbors: a caterpillar's legs, all of a star but its hub, or none of a path pivot first, each later column mapped back to its vertex, with fill or without, so `M x` solves to `x`, less a floating tree's pinned value.
+    #[test]
+    fn late_columns_map_back_to_their_vertices() {
+        let (spine, legs) = (150, 9);
+        // Spine vertex `s` is `10 s`, its legs the nine after it, so the vertices left skip nine of ten.
+        let caterpillar: Vec<_> = (0..spine)
+            .flat_map(|s| {
+                let at = s * (legs + 1);
+                let next = (s + 1 < spine).then_some((at, at + legs + 1));
+                (1..=legs).map(move |l| (at, at + l)).chain(next)
+            })
+            .collect();
+        let hub = 700;
+        let star: Vec<_> = (0..1500).filter(|&v| v != hub).map(|v| (v, hub)).collect();
+        let path: Vec<_> = (1..1500).map(|v| (v - 1, v)).collect();
+        // Each tree, where it is grounded, and how many vertices its phase leaves, the ground not counted.
+        for (label, edges, ground_at, left) in [
+            ("caterpillar", &caterpillar, [1, 2], Some(spine)),
+            ("star", &star, [3, 1400], Some(1)),
+            ("path", &path, [0, 0], None),
+        ] {
+            for grounded in [false, true] {
+                let (n, label) = (edges.len() + 1, format!("{label}, grounded {grounded}"));
+                let (m, apply) = tree(n, edges, if grounded { &ground_at } else { &[] });
+                let room = EliminationGraph::<f64, u32, Single>::room(&m);
+                let first = LocalMinima::of(&m, &room, m.ground()).map(|first| first.left);
+                assert_eq!(first, left.map(|l| l + usize::from(grounded)), "{label}");
+                let x: Vec<f64> = (0..n)
+                    .map(|v| ((v * 7919) % 101) as f64 / 50.0 - 1.0)
+                    .collect();
+                let mut y = apply(&x);
+                let draws = Xoshiro256PlusPlus::seed_from_u64(5);
+                let (steps, pinned) =
+                    CliqueTreeElimination::new(None).eliminate(m, Unsigned, draws, None);
+                assert_eq!(pinned.is_none(), grounded, "{label}");
+                steps.substitute(&mut y, pinned);
+                let shift = pinned.map_or(0.0, |p| x[p]);
+                let off = (0..n)
+                    .map(|v| (y[v] - (x[v] - shift)).abs())
+                    .fold(0.0, f64::max);
+                assert!(off < 1e-9, "{label}: off by {off:e}");
             }
         }
     }
