@@ -162,27 +162,31 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         for v in 1..n {
             start[v + 1] = start[v] + row(v - 1);
         }
-        let mut rows = vec![(I::from_index(0), T::zero()); start[n] + row(n - 1)];
+        let entries = start[n] + row(n - 1);
+        let (mut to, mut weights) = (vec![I::from_index(0); entries], vec![T::zero(); entries]);
         drop(room);
         let mut staged = Vec::new();
         m.grounded_edges(|k, j, w| {
-            let (row, to) = match (first.gone(k.index()), first.gone(j.index())) {
+            let (row, other) = match (first.gone(k.index()), first.gone(j.index())) {
                 (true, _) => (k, j),
                 (_, true) => (j, k),
                 _ => return staged.push((k, j, split, w)),
             };
-            rows[start[row.index() + 1]] = (to, w);
-            start[row.index() + 1] += 1;
+            let at = &mut start[row.index() + 1];
+            (to[*at], weights[*at]) = (other, w);
+            *at += 1;
         });
         drop(m);
-        let mut steps = ApproximateCholesky::with_capacity(n, rows.len());
-        let mut merged = staged.len();
+        // The rows become the steps: each column is written over its own row, which it never outgrows.
+        let mut steps = ApproximateCholesky::over_rows(n, to, weights);
+        let (mut written, mut merged) = (0, staged.len());
         let Self { clique, fill, .. } = self;
         for v in (0..n).filter(|&v| first.gone(v)) {
-            let row = rows[start[v]..start[v + 1]].iter();
+            let row = (start[v]..start[v + 1])
+                .map(|k| (steps.neighbors[k], split, steps.coefficients[k]));
             fill.clear();
-            let column = clique.eliminate(draws, row.map(|&(u, w)| (u, split, w)), fill, sign);
-            steps.push(v, column, slots);
+            let d = clique.pivot(draws, row, fill, sign);
+            steps.overwrite(&mut written, v, (d, clique.shares(d)), slots);
             staged.extend_from_slice(fill);
             // So past 2^16 pairs the staging stays within twice its merged size.
             if staged.len() >= (2 * merged).max(1 << 16) {
@@ -190,7 +194,9 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
                 merged = staged.len();
             }
         }
-        drop((rows, start));
+        steps.neighbors.truncate(written);
+        steps.coefficients.truncate(written);
+        drop(start);
         merge_pairs(&mut staged, first, split, sign);
         self.graph.load_merged(&staged, |v| first.gone(v), n, split);
         steps
@@ -384,6 +390,36 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
             neighbors: Vec::with_capacity(entries),
             coefficients: Vec::with_capacity(entries),
         }
+    }
+
+    /// Headers for `n` steps over `neighbors` and `coefficients` as rows that [`overwrite`](Self::overwrite) reads before it writes.
+    fn over_rows(n: usize, neighbors: Vec<I>, coefficients: Vec<T>) -> Self {
+        Self {
+            headers: Vec::with_capacity(n),
+            neighbors,
+            coefficients,
+        }
+    }
+
+    /// As [`push`](Self::push), but from `written` on, which it advances: never past the row just read.
+    fn overwrite(
+        &mut self,
+        written: &mut usize,
+        vertex: usize,
+        (d, shares): (f64, impl Iterator<Item = (I, f64)>),
+        slots: usize,
+    ) {
+        let start = *written;
+        for (neighbor, share) in shares.filter(|&(j, _)| j.index() < slots) {
+            self.neighbors[*written] = neighbor;
+            self.coefficients[*written] = narrow(share);
+            *written += 1;
+        }
+        self.headers.push(StepHeader {
+            vertex: I::from_index(vertex),
+            len: I::from_index(*written - start),
+            inverse_degree: narrow(1.0 / d),
+        });
     }
 
     /// Each share `w/d` and `D⁻¹` rounded once from `f64`: no share is derived from the others, so none cancels (#275, #302); only `M`'s `slots` take one, not the ground past them.

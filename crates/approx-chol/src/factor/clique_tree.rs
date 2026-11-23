@@ -69,12 +69,26 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         fill: &mut Fill<T, I, C>,
         sign: S,
     ) -> (f64, impl Iterator<Item = (I, f64)> + '_) {
+        let d = self.pivot(draws, neighbors, fill, sign);
+        (d, self.shares(d))
+    }
+
+    /// [`eliminate`](Self::eliminate)'s `d`, done with `neighbors` once it returns.
+    pub(super) fn pivot<S: Sign<T, I>>(
+        &mut self,
+        draws: &mut Xoshiro256PlusPlus,
+        neighbors: impl Iterator<Item = (I, C, T)>,
+        fill: &mut Fill<T, I, C>,
+        sign: S,
+    ) -> f64 {
         self.refill(neighbors, sign, |edge| fill.push(edge));
-        let d = (self.sample(draws, |edge| fill.push(edge), sign, 0.0))
-            .expect("a pivot of a connected graph has a neighbor");
-        let shares =
-            (self.entries.iter()).map(move |entry| (entry.neighbor, widen(entry.weight) / d));
-        (d, shares)
+        (self.sample(draws, |edge| fill.push(edge), sign, 0.0))
+            .expect("a pivot of a connected graph has a neighbor")
+    }
+
+    /// The pivoted star's shares `w/d`.
+    pub(super) fn shares(&self, d: f64) -> impl Iterator<Item = (I, f64)> + '_ {
+        (self.entries.iter()).map(move |entry| (entry.neighbor, widen(entry.weight) / d))
     }
 
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots; `ground` joins the degree, never the tree.
