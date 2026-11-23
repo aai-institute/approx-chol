@@ -76,6 +76,12 @@ fn path(n: usize) -> Vec<(usize, usize)> {
     (1..n).map(|i| (i - 1, i)).collect()
 }
 
+fn ring(n: usize) -> Vec<(usize, usize)> {
+    let mut edges = path(n);
+    edges.push((n - 1, 0));
+    edges
+}
+
 fn grid(k: usize) -> Vec<(usize, usize)> {
     let edges = crate::common::grid::grid(k, k).edges;
     edges.iter().map(|edge| (edge.a, edge.b)).collect()
@@ -192,6 +198,71 @@ fn a_wide_f32_gram_null_vector_scales_in_range() {
     let gram = FactorWidth2::new(n as usize, (&a, &x), (&b, &y)).expect("valid columns");
     let factor = factorize(gram).expect("admitted");
     assert!(only(&factor).floats());
+}
+
+/// The forest composes each `u_i` from rounded ratios, so a long cycle's rows miss by `20–35ε` though `V` is exact (#210); a miss a few bands wide, beside that rounding, is still one.
+#[rstest]
+#[case::ring(ring(3000), 0, 0.0)]
+#[case::ring_missed(ring(3000), 0, 1e-10)]
+#[case::ring_missed_by_bands(ring(10_000), 6, 100.0 * f64::EPSILON)]
+#[case::grid(grid(300), 2, 0.0)]
+#[case::grid_missed(grid(300), 2, 1e-10)]
+fn an_exact_gram_null_vector_reports_only_a_real_miss(
+    #[case] edges: Vec<(usize, usize)>,
+    #[case] seed: u64,
+    #[case] miss: f64,
+) {
+    let n = (edges.iter())
+        .map(|&(i, j)| i.max(j) + 1)
+        .max()
+        .expect("edges");
+    let mut lcg = Lcg(seed);
+    let u: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, 24)).collect();
+    let a: Vec<u32> = edges.iter().map(|&(i, _)| i as u32).collect();
+    let b: Vec<u32> = edges.iter().map(|&(_, j)| j as u32).collect();
+    let mut x: Vec<f64> = edges.iter().map(|&(_, j)| u[j]).collect();
+    let y: Vec<f64> = edges.iter().map(|&(i, _)| -u[i]).collect();
+    *x.last_mut().expect("edges") *= 1.0 + miss;
+    // The missed edge `(p, q)` weighs `u_p²/Σ_{j~q} u_j²` in row `q`, which a seed can drive to `0`.
+    let (p, q) = *edges.last().expect("edges");
+    let neighbours: f64 = (edges.iter())
+        .filter_map(|&(i, j)| (i == q).then_some(j).or((j == q).then_some(i)))
+        .map(|j| u[j] * u[j])
+        .sum();
+    let footprint = miss * u[p] * u[p] / neighbours;
+    assert!(footprint >= miss / 4.0, "footprint {footprint:e}");
+    let gram = FactorWidth2::new(n, (&a, &x), (&b, &y)).expect("valid columns");
+    let factor = factorize(gram).expect("admitted");
+    let clamps = factor.clamps();
+    assert_eq!(clamps.is_empty(), miss == 0.0, "{clamps:?}");
+    assert!(
+        (clamps.iter()).all(|c| c.violation > footprint / 2.0),
+        "{clamps:?}"
+    );
+}
+
+/// `u = 2^{0, −500, −1000, −500}`: the forest forms `2^-1000` below where FMA recovers a product's rounding, so that row's shift is unknown and its miss stays reported.
+#[test]
+fn a_null_vector_rounding_lost_below_range_keeps_its_report() {
+    let u = [1.0, 2f64.powi(-500), 2f64.powi(-1000), 2f64.powi(-500)];
+    let edges = [(0u32, 1u32), (1, 2), (2, 3), (3, 0)];
+    let (a, b): (Vec<u32>, Vec<u32>) = edges.iter().copied().unzip();
+    // Each column scaled so its entries are `2^±250`, keeping every diagonal in range.
+    let scale = |i: u32, j: u32| 2f64.powi(250) / u[i as usize].max(u[j as usize]);
+    let mut x: Vec<f64> = (edges.iter())
+        .map(|&(i, j)| scale(i, j) * u[j as usize])
+        .collect();
+    let y: Vec<f64> = (edges.iter())
+        .map(|&(i, j)| -scale(i, j) * u[i as usize])
+        .collect();
+    let miss = 1e-10;
+    x[1] *= 1.0 + miss;
+    let gram = FactorWidth2::new(4, (&a, &x), (&b, &y)).expect("valid columns");
+    let factor = factorize(gram).expect("admitted");
+    let [clamp] = &factor.clamps()[..] else {
+        panic!("one clamp: {:?}", factor.clamps())
+    };
+    assert!(clamp.violation > miss / 4.0, "{clamp:?}");
 }
 
 #[test]
