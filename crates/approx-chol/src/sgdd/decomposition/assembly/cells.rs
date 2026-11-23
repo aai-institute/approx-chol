@@ -227,7 +227,7 @@ fn left_ascending<T: Real, J: PrimInt, I: Index>(
     mut pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, BuildError> {
     let n_cols = v.n() - n_left;
-    let mut row = RowSums::new(n_cols);
+    let mut row = OpenRow::new(n_cols);
     let mut ptrs = Vec::with_capacity(n_left + 1);
     ptrs.push(0);
     let (mut columns, mut values) = (
@@ -235,15 +235,19 @@ fn left_ascending<T: Real, J: PrimInt, I: Index>(
         Vec::with_capacity(v.n_columns()),
     );
     let mut failed = None;
-    let mut close = |row: &mut RowSums<I>, ptrs: &mut Vec<usize>| {
-        let i = ptrs.len() - 1;
-        let closed = row.drain(|j, cell| {
-            pair(i, n_left + j.index(), cell);
-            columns.push(j);
-            values.push(admit::<T>(i, cell)?);
-            Ok(())
-        });
-        failed = failed.or(closed.err());
+    let mut close = |row: &mut OpenRow<I>, ptrs: &mut Vec<usize>| {
+        // A failed drain leaves its row's sums behind; later rows would emit them to `pair`.
+        if failed.is_none() {
+            let i = ptrs.len() - 1;
+            failed = row
+                .drain(|j, cell| {
+                    pair(i, n_left + j.index(), cell);
+                    columns.push(j);
+                    values.push(admit::<T>(i, cell)?);
+                    Ok(())
+                })
+                .err();
+        }
         ptrs.push(columns.len());
     };
     v.for_each_column::<I>(
@@ -269,7 +273,7 @@ fn left_ascending<T: Real, J: PrimInt, I: Index>(
 }
 
 /// One row's cells summed in column order, each column's first cell marking it touched.
-struct RowSums<I> {
+struct OpenRow<I> {
     /// One slot past the columns, where the empty run stores its zero.
     sums: Vec<f64>,
     touched: Vec<I>,
@@ -278,7 +282,7 @@ struct RowSums<I> {
     sum: f64,
 }
 
-impl<I: Index> RowSums<I> {
+impl<I: Index> OpenRow<I> {
     fn new(n_cols: usize) -> Self {
         Self {
             sums: vec![0.0; n_cols + 1],
@@ -372,7 +376,8 @@ mod tests {
 
     #[test]
     fn table_and_buckets_sum_valued_and_incidence_sides_alike() {
-        let left = [0, 0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 7, 8, 9, 9];
+        // The last cell steps back to row 0, so the buckets don't read the rows in place.
+        let left = [0, 0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 7, 8, 9, 0];
         let right = [0, 0, 1, 2, 2, 3, 4, 4, 5, 6, 7, 8, 9, 0, 1];
         let x = [
             1.0, 2.0, 1.5, 1.0, 0.5, 1.25, 2.0, 2.0, 1.0, 3.0, 1.0, 0.75, 1.0, 2.5, 1.0,
@@ -404,6 +409,7 @@ mod tests {
             (format!("{:?}", rows.unwrap()), seen, pairs)
         };
         for gram in [valued.unwrap(), incidence.unwrap()] {
+            assert!(!gram.lower().left_ends_ascend());
             assert_eq!(
                 sum(Accumulator::Table, gram),
                 sum(Accumulator::Buckets, gram)
@@ -440,6 +446,38 @@ mod tests {
             (format!("{:?}", rows.unwrap()), seen, pairs)
         };
         assert_eq!(sum(true), sum(false));
+    }
+
+    /// Row 0 overflows `f32` at its second column: read in place, the error and the cells `pair` saw match the buckets', so no later row emits row 0's leftover sums.
+    #[test]
+    fn an_overflowing_row_stops_in_place_as_in_the_buckets() {
+        let left = [0, 0, 0, 1, 2];
+        let right = [0, 1, 3, 3, 2];
+        let x = [1.0, 1e30, 1.0, 1.0, 1.0];
+        let y = [1.0, 1e10, 1.0, 1.0, 1.0];
+        let n_left = 4;
+        let gram = BipartiteFactorWidth2::new(
+            FactorWidth1::<f32>::valued(n_left, &left, &x).unwrap(),
+            FactorWidth1::valued(4, &right, &y).unwrap(),
+        )
+        .unwrap()
+        .lower();
+        assert!(gram.left_ends_ascend());
+        let sum = |ascending: bool| {
+            let mut pairs = Vec::new();
+            let pair_by = |i, j, cell| pairs.push((i, j, cell));
+            let rows = match ascending {
+                true => left_ascending::<f32, u32, u32>(gram, n_left, |_| {}, pair_by),
+                false => {
+                    let counts = counts::<f32, u32, u32>(gram, n_left, |_| {});
+                    sum_cells::<f32, u32, u32>(gram, &counts, n_left, pair_by)
+                }
+            };
+            (rows.map(|_| ()), pairs)
+        };
+        let (rows, pairs) = sum(true);
+        assert_eq!(rows, Err(BuildError::OutOfRange { vertex: 0 }));
+        assert_eq!((rows, pairs), sum(false));
     }
 
     /// Eleven cells: pushes doubling past them leave slack the factor would keep.
