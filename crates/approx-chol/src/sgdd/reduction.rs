@@ -350,9 +350,14 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let excess = (surplus.zip(diagonal)).map(move |(s, &d)| s - clamp * widen(d));
         match shifts {
             None => self.rows_past(ground, excess),
-            // A residue is `−shift` to first order; `max` also takes a `NaN` shift as `0`.
+            // A residue is `−shift` to first order; an unknown shift leaves the row on the flat clamp, as `reported` does.
             Some(shifts) => {
-                let excess = (excess.zip(shifts)).map(|(e, &r)| e - (-r).max(0.0));
+                let rounding = |r: f64, d: f64| match r.is_nan() {
+                    true => (self.clamped - clamp) * d,
+                    false => (-r).max(0.0),
+                };
+                let excess = (excess.zip(shifts.iter().zip(diagonal)))
+                    .map(move |(e, (&r, &d))| e - rounding(r, widen(d)));
                 self.rows_past(ground, excess)
             }
         }

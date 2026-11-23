@@ -266,44 +266,81 @@ fn a_null_vector_rounding_lost_below_range_keeps_its_report() {
     assert!(clamp.violation > miss / 4.0, "{clamp:?}");
 }
 
-/// The 3000-ring of seed 0, whose `u` rounding clamps rows `0` and `2999` by `~25ε` unreported (#210), bridged at its vertex 1500 to a triangle `t, t + 1, t + 2` with `u = 1`, a ground `c²` stated at `t + 1` and the closing column `(t + 2, t)` missing by `miss`: a ground `miss`, `~miss/2` of row `t + 2` and past its `21ε` band, twinned with a deficit `miss` at `t`. A heavy bridge keeps that deficit within `t`'s band, so the ground is kept; a light one reports it, and its twin goes with it (#513). `e_{t+1}`'s near-null response is `1/Σ_i g_i u_i²` over the kept grounds `g`.
+/// What [`a_ground_is_kept_only_past_its_tracked_band`] hangs on the 3000-ring of seed 0.
+#[derive(Debug)]
+enum Beside {
+    /// A triangle `t, t + 1, t + 2` with `u = 1`, bridged to the ring's vertex 1500 with weight `bridge²` at `t`, a ground `64ε` stated at `t + 1` and its closing column `(t + 2, t)` missing by `66ε`.
+    Triangle { bridge: f64 },
+    /// A ground `40ε·(u₁₄₅² + u₁₄₇²)` stated at vertex 146.
+    Stated,
+    /// As `Stated`, and a pendant `3000` on `2999` with `u = u₂₉₉₉·2⁻¹⁰⁰⁰`, its column scaled by `2⁴⁰⁰`: the forest forms `u` below where it tracks rounding, so row `2999`'s shift is unknown.
+    Pendant,
+}
+
+/// The 3000-ring of seed 0, whose `u` rounding clamps row `0` by `~25ε` unreported (#210), its twin a surplus at `2999` that the tracked rounding explains, not a ground; a row whose shift is unknown keeps the flat clamp. A triangle's closing column missing by `66ε` leaves a ground `~33ε` of row `t + 2`, past its `21ε` band but within it less the flat clamp, twinned with a deficit at `t`: a heavy bridge keeps that deficit within `t`'s band, so the ground is kept; a light one reports it, and its twin goes with it (#513). `e_s` at the stated row `s` responds by `u_s²/Σ_i g_i u_i²` over the kept grounds `g`.
 #[rstest]
-#[case::beside_rounding(30.0, true)]
-#[case::twin_of_a_reported_deficit(0.1, false)]
-fn a_ground_past_its_tracked_band_is_kept_beside_null_vector_rounding(
-    #[case] bridge: f64,
+#[case::beside_rounding(Beside::Triangle { bridge: 30.0 }, false, true)]
+#[case::twin_of_a_reported_deficit(Beside::Triangle { bridge: 0.1 }, true, false)]
+#[case::rounding_twin_explained(Beside::Stated, false, false)]
+#[case::rounding_twin_beside_an_unknown_shift(Beside::Pendant, false, false)]
+fn a_ground_is_kept_only_past_its_tracked_band(
+    #[case] beside: Beside,
+    #[case] reported: bool,
     #[case] kept: bool,
 ) {
     let n = 3000;
-    let (t, m) = (n, n / 2);
     let mut lcg = Lcg(0);
     let mut u: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, 24)).collect();
-    u.extend([1.0; 3]);
     let mut edges = ring(n);
-    edges.extend([(t, t + 1), (t + 1, t + 2), (t + 2, t), (m, t)]);
+    let (t, m) = (n, n / 2);
+    match beside {
+        Beside::Triangle { .. } => {
+            u.extend([1.0; 3]);
+            edges.extend([(t, t + 1), (t + 1, t + 2), (t + 2, t), (m, t)]);
+        }
+        Beside::Stated => {}
+        Beside::Pendant => {
+            u.push(u[n - 1] * 2f64.powi(-1000));
+            edges.push((n - 1, n));
+        }
+    }
     let mut a: Vec<u32> = edges.iter().map(|&(i, _)| i as u32).collect();
     let mut b: Vec<u32> = edges.iter().map(|&(_, j)| j as u32).collect();
     let mut x: Vec<f64> = edges.iter().map(|&(_, j)| u[j]).collect();
     let mut y: Vec<f64> = edges.iter().map(|&(i, _)| -u[i]).collect();
     // `33ε` of its row: past its band, within it less the ring's flat clamp.
     let miss = 66.0 * f64::EPSILON;
-    x[n + 2] *= 1.0 + miss;
-    // `t`'s diagonal is `2 + bridge²`.
-    x[n + 3] *= bridge / u[m];
-    y[n + 3] *= bridge / u[m];
-    // `32ε` of its row, past the `19ε` band of no entry.
-    let stated = 64.0 * f64::EPSILON;
-    a.push(t as u32 + 1);
-    b.push(t as u32 + 2);
+    let (s, stated) = match beside {
+        Beside::Triangle { bridge } => {
+            x[n + 2] *= 1.0 + miss;
+            // `t`'s diagonal is `2 + bridge²`.
+            x[n + 3] *= bridge / u[m];
+            y[n + 3] *= bridge / u[m];
+            // `32ε` of its row, past the `19ε` band of no entry.
+            (t + 1, 64.0 * f64::EPSILON)
+        }
+        Beside::Stated | Beside::Pendant => {
+            if let Some(pendant) = x.get_mut(n) {
+                *pendant *= 2f64.powi(400);
+                y[n] *= 2f64.powi(400);
+            }
+            (
+                146,
+                40.0 * f64::EPSILON * (u[145] * u[145] + u[147] * u[147]),
+            )
+        }
+    };
+    a.push(s as u32);
+    b.push(s as u32 + 1);
     x.push(stated.sqrt());
     y.push(0.0);
-    let gram = FactorWidth2::new(n + 3, (&a, &x), (&b, &y)).expect("valid columns");
+    let gram = FactorWidth2::new(u.len(), (&a, &x), (&b, &y)).expect("valid columns");
     let factor = factorize(gram).expect("admitted");
     let clamps = factor.clamps();
-    assert_eq!(clamps.is_empty(), kept, "{clamps:?}");
-    let mut e = vec![0.0; n + 3];
-    e[t + 1] = 1.0;
-    let response = factor.solve(&e).expect("solves")[t + 1];
+    assert_eq!(clamps.is_empty(), !reported, "{clamps:?}");
+    let mut e = vec![0.0; u.len()];
+    e[s] = 1.0;
+    let response = factor.solve(&e).expect("solves")[s];
     let grounds = if kept { stated + miss } else { stated };
     let ratio = response * grounds;
     assert!((ratio - 1.0).abs() < 0.05, "{ratio}");
