@@ -30,7 +30,7 @@ pub(super) struct Counted<'a, T: Clone, J: Clone> {
     above: usize,
 }
 
-/// Unions each nonzero above the diagonal, counting them for a whole input's block: a checked `A` stored whole mirrors them below.
+/// Unions each nonzero above the diagonal, counting the stored entries there for a whole input's block: a checked `A` stored whole mirrors them below.
 pub(super) fn of_csr<T: Real, J: PrimInt, I: Index>(
     csr: Canonical<'_, T, J>,
 ) -> Partitioned<Counted<'_, T, J>, I> {
@@ -479,6 +479,7 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Counted<'_, T, J> 
     }
 
     fn whole(self, vertices: &[I]) -> Self::Block {
+        debug_assert_eq!(vertices.len(), self.csr.n(), "the count covers every row");
         self.csr.rows(vertices, self.above, I::from_index)
     }
 
