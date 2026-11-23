@@ -63,9 +63,9 @@ fn dense_arm_solves_a_pendant_behind_a_heavy_frustrated_triangle() {
     assert_componentwise(&graph, &csr_factor(&graph, dense()), &x_true);
 }
 
-/// The dense solve pins the last vertex, whose only edge is below its neighbour's pivot ulp.
+/// The dense solve pins the last vertex, whose only edge is below its neighbour's pivot ulp: the edge rounds away, the block splits, and the unpinned piece's offset cancels to 0.
 #[test]
-#[ignore = "#284: componentwise accuracy of a floating solve pinned at a weakly coupled vertex"]
+#[ignore = "#284: a floating block split by a coupling below a pivot ulp; no build-time pin fixes every split"]
 fn floating_laplacian_solves_with_a_weakly_coupled_last_vertex() {
     let x_true = [-1.0 / 3.0, 2.0 / 3.0, -1.0 / 3.0];
     let graph = Graph::new(
