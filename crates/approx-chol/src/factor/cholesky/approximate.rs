@@ -223,6 +223,8 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
                 (steps.neighbors[written], steps.coefficients[written]) = (neighbor, share);
                 written += 1;
             });
+            // Later minima still read the rows past it: `refill` never returns more entries than the row it reads.
+            debug_assert!(written <= start[v + 1], "column {v} outgrows its row");
             staged.extend_from_slice(fill);
             // So past 2^16 pairs the staging stays within twice its merged size.
             if staged.len() >= (2 * merged).max(1 << 16) {
