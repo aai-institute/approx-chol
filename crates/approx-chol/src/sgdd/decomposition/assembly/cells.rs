@@ -32,7 +32,7 @@ const DENSE_TABLE_MAX_CELLS: usize = 5_000_000;
 /// Measured crossover in instructions: the table wins once `V`'s columns reach a tenth of its cells.
 const DENSE_TABLE_CELLS_PER_COLUMN: usize = 10;
 
-/// Where `C`'s cells are summed: a dense table over both sides (+54% without it), or buckets per left row.
+/// Where `C`'s cells are summed: a dense table over both sides (+54% without it), or per left row, read in place when `V`'s left ends ascend, else through buckets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Accumulator {
     Table,
@@ -230,23 +230,19 @@ fn left_ascending<T: Real, J: PrimInt, I: Index>(
     let mut row = OpenRow::new(n_cols);
     let mut ptrs = Vec::with_capacity(n_left + 1);
     ptrs.push(0);
-    let (mut columns, mut values) = (
-        Vec::with_capacity(v.n_columns()),
-        Vec::with_capacity(v.n_columns()),
-    );
-    let mut failed = None;
+    let mut columns = Vec::with_capacity(v.n_columns());
+    let mut values = Vec::with_capacity(v.n_columns());
+    let mut done = Ok(());
     let mut close = |row: &mut OpenRow<I>, ptrs: &mut Vec<usize>| {
         // A failed drain leaves its row's sums behind; later rows would emit them to `pair`.
-        if failed.is_none() {
+        if done.is_ok() {
             let i = ptrs.len() - 1;
-            failed = row
-                .drain(|j, cell| {
-                    pair(i, n_left + j.index(), cell);
-                    columns.push(j);
-                    values.push(admit::<T>(i, cell)?);
-                    Ok(())
-                })
-                .err();
+            done = row.drain(|j, cell| {
+                pair(i, n_left + j.index(), cell);
+                columns.push(j);
+                values.push(admit::<T>(i, cell)?);
+                Ok(())
+            });
         }
         ptrs.push(columns.len());
     };
@@ -263,9 +259,7 @@ fn left_ascending<T: Real, J: PrimInt, I: Index>(
     while ptrs.len() <= n_left {
         close(&mut row, &mut ptrs);
     }
-    if let Some(error) = failed {
-        return Err(error);
-    }
+    done?;
     drop(row);
     columns.shrink_to_fit();
     values.shrink_to_fit();
@@ -299,10 +293,10 @@ impl<I: Index> OpenRow<I> {
             self.sums[self.run] = self.sum;
             self.run = j.index();
             self.sum = self.sums[self.run];
-        }
-        // A cell cancelling to zero mid-row is pushed again; the dedup absorbs it.
-        if self.sum == 0.0 {
-            self.touched.push(j);
+            // A column met again after cancelling to zero is pushed again; the dedup absorbs it.
+            if self.sum == 0.0 {
+                self.touched.push(j);
+            }
         }
         self.sum += cell;
     }
@@ -332,6 +326,25 @@ impl<I: Index> OpenRow<I> {
 mod tests {
     use super::*;
     use crate::input::{BipartiteFactorWidth2, FactorWidth1};
+
+    /// Rows (or error), `seen` and `pair` from the table and the buckets.
+    fn table_and_buckets<T: Real>(v: FactorWidth2<'_, T, u32>, n_left: usize) -> [Summed; 2] {
+        [Accumulator::Table, Accumulator::Buckets].map(|accumulator| {
+            let (mut seen, mut pairs) = (Vec::new(), Vec::new());
+            let rows = accumulator.cross::<T, u32, u32>(
+                v,
+                n_left,
+                |column| seen.push((column.a, column.b, column.cell())),
+                |i, j, cell| pairs.push((i, j, cell)),
+            );
+            (rows.map(|rows| format!("{rows:?}")), seen, pairs)
+        })
+    }
+    type Summed = (
+        Result<String, BuildError>,
+        Vec<(u32, u32, f64)>,
+        Vec<(usize, usize, f64)>,
+    );
 
     fn filling(cells: usize) -> usize {
         cells.div_ceil(DENSE_TABLE_CELLS_PER_COLUMN)
@@ -398,28 +411,16 @@ mod tests {
             FactorWidth1::new(10, &right).unwrap(),
             &s,
         );
-        let sum = |accumulator: Accumulator, gram: BipartiteFactorWidth2<'_, f64>| {
-            let (mut seen, mut pairs) = (Vec::new(), Vec::new());
-            let rows = accumulator.cross::<f64, u32, u32>(
-                gram.lower(),
-                n_left,
-                |column| seen.push((column.a, column.b, column.cell())),
-                |i, j, cell| pairs.push((i, j, cell)),
-            );
-            (format!("{:?}", rows.unwrap()), seen, pairs)
-        };
         for gram in [valued.unwrap(), incidence.unwrap()] {
             assert!(!gram.lower().left_ends_ascend());
-            assert_eq!(
-                sum(Accumulator::Table, gram),
-                sum(Accumulator::Buckets, gram)
-            );
+            let [table, buckets] = table_and_buckets(gram.lower(), n_left);
+            assert_eq!(table, buckets);
         }
     }
 
-    /// Ascending lower ends, a row cancelling to zero and rows with no cell: read in place, the rows, `seen` and `pair` match the buckets'.
+    /// Ascending left ends, a row cancelling to zero and rows with no cell: read in place, the rows, `seen` and `pair` match the table's.
     #[test]
-    fn ascending_rows_read_in_place_sum_as_the_buckets() {
+    fn ascending_rows_read_in_place_sum_as_the_table() {
         let left = [0, 0, 0, 2, 2, 2, 5, 5, 6, 6, 9];
         let right = [3, 1, 3, 0, 0, 2, 4, 1, 4, 4, 0];
         let x = [1.0, 2.0, -1.0, 1.0, 0.5, 1.25, 2.0, 2.0, 1.0, 3.0, 1.0];
@@ -432,25 +433,13 @@ mod tests {
         .unwrap()
         .lower();
         assert!(gram.left_ends_ascend());
-        let sum = |ascending: bool| {
-            let (mut seen, mut pairs) = (Vec::new(), Vec::new());
-            let seen_by = |column: &Column<f64, u32>| seen.push((column.a, column.cell()));
-            let pair_by = |i, j, cell| pairs.push((i, j, cell));
-            let rows = match ascending {
-                true => left_ascending::<f64, u32, u32>(gram, n_left, seen_by, pair_by),
-                false => {
-                    let counts = counts::<f64, u32, u32>(gram, n_left, seen_by);
-                    sum_cells::<f64, u32, u32>(gram, &counts, n_left, pair_by)
-                }
-            };
-            (format!("{:?}", rows.unwrap()), seen, pairs)
-        };
-        assert_eq!(sum(true), sum(false));
+        let [table, in_place] = table_and_buckets(gram, n_left);
+        assert_eq!(table, in_place);
     }
 
-    /// Row 0 overflows `f32` at its second column: read in place, the error and the cells `pair` saw match the buckets', so no later row emits row 0's leftover sums.
+    /// Row 0 overflows `f32` at its second column: read in place, the error and the cells `pair` saw match the table's, so no later row emits row 0's leftover sums.
     #[test]
-    fn an_overflowing_row_stops_in_place_as_in_the_buckets() {
+    fn an_overflowing_row_stops_in_place_as_in_the_table() {
         let left = [0, 0, 0, 1, 2];
         let right = [0, 1, 3, 3, 2];
         let x = [1.0, 1e30, 1.0, 1.0, 1.0];
@@ -463,21 +452,9 @@ mod tests {
         .unwrap()
         .lower();
         assert!(gram.left_ends_ascend());
-        let sum = |ascending: bool| {
-            let mut pairs = Vec::new();
-            let pair_by = |i, j, cell| pairs.push((i, j, cell));
-            let rows = match ascending {
-                true => left_ascending::<f32, u32, u32>(gram, n_left, |_| {}, pair_by),
-                false => {
-                    let counts = counts::<f32, u32, u32>(gram, n_left, |_| {});
-                    sum_cells::<f32, u32, u32>(gram, &counts, n_left, pair_by)
-                }
-            };
-            (rows.map(|_| ()), pairs)
-        };
-        let (rows, pairs) = sum(true);
-        assert_eq!(rows, Err(BuildError::OutOfRange { vertex: 0 }));
-        assert_eq!((rows, pairs), sum(false));
+        let [table, in_place] = table_and_buckets(gram, n_left);
+        assert_eq!(in_place.0, Err(BuildError::OutOfRange { vertex: 0 }));
+        assert_eq!(table, in_place);
     }
 
     /// Eleven cells: pushes doubling past them leave slack the factor would keep.
