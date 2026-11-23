@@ -85,31 +85,64 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             .flatten();
         // Every vertex left but one: the never-pivoted one, or the order's last.
         let pivots = first.as_ref().map_or(n, |first| first.left) - 1;
-        let mut steps = match &first {
+        let (mut steps, last) = match first {
             None => {
                 self.graph.load(&m, &room, self.copies);
                 drop((m, room));
-                ApproximateCholesky::with_capacity(n, 0)
+                let steps = ApproximateCholesky::with_capacity(n, 0);
+                self.pivot_rest(steps, (never, n), sign, &mut draws, slots, pivots)
             }
-            Some(first) => self.pivot_first((m, room), first, sign, &mut draws, slots),
+            Some(first) => {
+                let steps = self.pivot_first((m, room), &first, sign, &mut draws, slots);
+                // The graph left numbers the vertices left by `first`'s ids, which keep their order, so the ground stays past the slots.
+                let from = steps.ends();
+                let vertices: Vec<I> = (0..n)
+                    .filter(|&v| !first.gone(v))
+                    .map(I::from_index)
+                    .collect();
+                let id = |v: usize| first.id(I::from_index(v));
+                let (never, sign) = (
+                    never.map(id),
+                    sign.renumbered(|g| I::from_index(id(g.index()))),
+                );
+                let slots = slots - (n - first.left);
+                drop(first);
+                let (mut steps, last) =
+                    self.pivot_rest(steps, (never, n), sign, &mut draws, slots, pivots);
+                steps.renumber(from, |v| vertices[v.index()]);
+                (steps, last.map(|v| vertices[v].index()))
+            }
         };
-        let edge_ends = self.graph.edge_ends();
-        let queue = |v| Some(v) != never && !first.as_ref().is_some_and(|first| first.gone(v));
-        self.order.load(&self.graph, self.copies, queue, edge_ends);
-        drop(first);
-        steps.neighbors.reserve_exact(edge_ends);
-        steps.coefficients.reserve_exact(edge_ends);
-        self.pivot_all(&mut draws, &mut steps, slots, sign, pivots);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
-        let pinned = ground
-            .is_none()
-            .then(|| gauge.unwrap_or_else(|| self.order.next_vertex()));
+        let pinned =
+            (ground.is_none()).then(|| gauge.or(last).expect("a floating block leaves one vertex"));
         if n > REUSED_UP_TO {
             *self = Self::new(self.copies);
         }
         (steps, pinned)
+    }
+
+    /// The graph's `pivots` in minimum-degree order but `never`, keys scaled for `scale_n` vertices; returns the steps and, unless `never` stays, the vertex left.
+    fn pivot_rest<S: Sign<T, I>>(
+        &mut self,
+        mut steps: ApproximateCholesky<T, I>,
+        (never, scale_n): (Option<usize>, usize),
+        sign: S,
+        draws: &mut Xoshiro256PlusPlus,
+        slots: usize,
+        pivots: usize,
+    ) -> (ApproximateCholesky<T, I>, Option<usize>) {
+        let edge_ends = self.graph.edge_ends();
+        let queue = |v| Some(v) != never;
+        self.order
+            .load(&self.graph, self.copies, queue, edge_ends, scale_n);
+        steps.neighbors.reserve_exact(edge_ends);
+        steps.coefficients.reserve_exact(edge_ends);
+        self.pivot_all(draws, &mut steps, slots, sign, pivots);
+        let last = never.is_none().then(|| self.order.next_vertex());
+        (steps, last)
     }
 
     #[inline(never)] // Inlined, its codegen moves with the buffer handling: grids +1-3%.
@@ -198,7 +231,13 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         steps.coefficients.truncate(written);
         drop(start);
         merge_pairs(&mut staged, first, split, sign);
-        self.graph.load_merged(&staged, |v| first.gone(v), n, split);
+        for pair in &mut staged {
+            (pair.0, pair.1) = (
+                I::from_index(first.id(pair.0)),
+                I::from_index(first.id(pair.1)),
+            );
+        }
+        self.graph.load_merged(&staged, first.left, split);
         steps
     }
 }
@@ -398,6 +437,21 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
             headers: Vec::with_capacity(n),
             neighbors,
             coefficients,
+        }
+    }
+
+    /// Where the steps end: their headers, and their entries.
+    fn ends(&self) -> (usize, usize) {
+        (self.headers.len(), self.neighbors.len())
+    }
+
+    /// The steps past `from` renumbered by `vertex`, pivots and neighbors.
+    fn renumber(&mut self, (headers, entries): (usize, usize), vertex: impl Fn(I) -> I) {
+        for header in &mut self.headers[headers..] {
+            header.vertex = vertex(header.vertex);
+        }
+        for neighbor in &mut self.neighbors[entries..] {
+            *neighbor = vertex(*neighbor);
         }
     }
 

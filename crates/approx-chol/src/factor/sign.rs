@@ -16,6 +16,9 @@ pub(super) trait Sign<T: Real, I: Index>: Copy {
     /// The vertex a merge's cancelled magnitude grounds both its ends to; none where nothing cancels.
     fn ground(self) -> Option<I>;
 
+    /// The same sign, its ground renumbered by `vertex`.
+    fn renumbered(self, vertex: impl FnOnce(I) -> I) -> Self;
+
     /// Whether a decoded factor's share `c` is one this sign's elimination stores.
     #[cfg(feature = "serde")]
     fn admits(c: T) -> bool;
@@ -51,6 +54,10 @@ impl<T: Real, I: Index> Sign<T, I> for Unsigned {
         None
     }
 
+    fn renumbered(self, _: impl FnOnce(I) -> I) -> Self {
+        self
+    }
+
     #[cfg(feature = "serde")]
     fn admits(c: T) -> bool {
         c >= T::zero()
@@ -82,6 +89,12 @@ impl<T: Real, I: Index> Sign<T, I> for Signed<I> {
 
     fn ground(self) -> Option<I> {
         Some(self.ground)
+    }
+
+    fn renumbered(self, vertex: impl FnOnce(I) -> I) -> Self {
+        Self {
+            ground: vertex(self.ground),
+        }
     }
 
     /// A share of either sign; `fits` bounds its magnitude.

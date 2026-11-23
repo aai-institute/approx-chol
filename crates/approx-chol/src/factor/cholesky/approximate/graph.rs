@@ -90,15 +90,9 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         m.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
     }
 
-    /// `pairs`, each once with its capped copies; a vertex `gone` gets no room.
-    pub(super) fn load_merged(
-        &mut self,
-        pairs: &[Pair<T, I, C>],
-        gone: impl Fn(usize) -> bool,
-        n: usize,
-        split: C,
-    ) {
-        let mut room: Vec<u32> = (0..n).map(|v| u32::from(!gone(v))).collect();
+    /// `pairs` on `n` vertices, each pair once with its capped copies.
+    pub(super) fn load_merged(&mut self, pairs: &[Pair<T, I, C>], n: usize, split: C) {
+        let mut room = vec![1u32; n];
         for &(k, j, _, _) in pairs {
             room[k.index()] = room[k.index()].saturating_add(1);
             room[j.index()] = room[j.index()].saturating_add(1);
@@ -414,7 +408,7 @@ mod tests {
                 .map(|neighbor| (0, neighbor, split.cap(neighbor), f64::from(neighbor)))
                 .collect();
             let mut graph = EliminationGraph::<f64, u32, C>::new();
-            graph.load_merged(&pairs, |_| false, 9, split);
+            graph.load_merged(&pairs, 9, split);
             graph.lists.assert_consistent();
             for neighbor in 1..9u32 {
                 let entries: Vec<_> = graph.neighbors(neighbor as usize).collect();

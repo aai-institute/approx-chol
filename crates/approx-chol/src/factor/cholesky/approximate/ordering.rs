@@ -31,16 +31,17 @@ impl<I: Index> MinDegreeOrder<I> {
         }
     }
 
-    /// The vertices `queued` holds; the never-pivoted vertex, or one pivoted already, is not.
+    /// The vertices `queued` holds; the never-pivoted vertex, or one pivoted already, is not. Keys scale as for `scale_n` vertices: the graph's, or its block's before the local minima left it.
     pub(super) fn load<T: Real, C: Copies>(
         &mut self,
         graph: &EliminationGraph<T, I, C>,
         split: C,
         queued: impl Fn(usize) -> bool,
         edge_ends: usize,
+        scale_n: usize,
     ) {
         let n = graph.n();
-        let scale = KeyScale::new(n, edge_ends, split.get());
+        let scale = KeyScale::new(scale_n, edge_ends, split.get());
         let Self { elems, lists, .. } = self;
         lists.clear();
         lists.resize(scale.n_buckets(), sentinel());
@@ -195,7 +196,7 @@ mod tests {
             graph.push_pair(v, v + 1, split, 1.0);
         }
         let mut order = MinDegreeOrder::new();
-        order.load(&graph, split, |_| true, graph.edge_ends());
+        order.load(&graph, split, |_| true, graph.edge_ends(), graph.n());
         let mut popped = Vec::new();
         for _ in 0..3 {
             let v = order.next_vertex();
