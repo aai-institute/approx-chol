@@ -133,6 +133,14 @@ impl<T: Real, I: Index> Shifted<'_, '_, T, I> {
         }
     }
 
+    /// `‖(αI − N) y − b‖₂` of the whole `y` of an iterate whose CG residual is `r`: a bipartite `N`'s lift solves its eliminated rows exactly, leaving `r/α` on the kept ones.
+    pub(super) fn whole_residual(&self, r: f64) -> f64 {
+        match self {
+            Self::Whole { .. } => r,
+            Self::Kept(kept) => r / kept.alpha,
+        }
+    }
+
     /// The whole `y` of an iterate.
     pub(super) fn solution<'x>(&self, x: &'x [f64]) -> Cow<'x, [f64]> {
         match self {

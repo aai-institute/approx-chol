@@ -124,14 +124,62 @@ fn a_reduction_keeps_its_own_scaling_when_factored() {
     assert!(!only(&factor).grounding_unproven());
 }
 
-/// Settled within 16ε, then `F·A·F` rounds a few ε more: this grid's 17.3ε is rounding, not a deficit.
-#[test]
-fn a_settled_scaling_with_rounding_deficit_is_not_clamped() {
-    let k = 22;
-    let (row_ptrs, columns, values) = dld(k * k, &grid(k), 1e-3, 30);
+/// A rounded `D L D` triangle whose `y = 1` certifies at eigen-residual `7.7e-15`, past the band: one Noda step already meets INI 1's tolerance, and only a polish settles it; kept, row 0's `7.3e-15` surplus grounded it.
+fn rounded_triangle() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    let (b, c) = (8.000_000_000_000_12, 18.000_000_000_000_27);
+    let off = -6.000_000_000_000_179;
+    let values = vec![2.0, -2.0, -3.0, -2.0, b, off, -3.0, off, c];
+    (vec![0, 3, 6, 9], vec![0, 1, 2, 0, 1, 2, 0, 1, 2], values)
+}
+
+/// `k × k` grid, each vertex's right then down edge, `D` and weights log-uniform over `[2^-bits, 1)`, off-diagonals raised by `1 + η`: `D L_w D` with `ρ(N) = 1 + η`.
+fn weighted_raised(k: usize, eta: f64, bits: u32, seed: u64) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    let n = k * k;
+    let mut lcg = Lcg(seed.wrapping_mul(2_654_435_761).wrapping_add(17));
+    let d: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, bits)).collect();
+    let right = |v: usize| (v % k + 1 < k).then_some(v + 1);
+    let down = |v: usize| (v + k < n).then_some(v + k);
+    let edges = (0..n).flat_map(|v| {
+        [right(v), down(v)]
+            .into_iter()
+            .flatten()
+            .map(move |w| (v, w))
+    });
+    let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+    let mut degrees = vec![0.0; n];
+    for (i, j) in edges {
+        let w = log_uniform(&mut lcg, bits);
+        rows[i].push((j, -w * (1.0 + eta)));
+        rows[j].push((i, -w * (1.0 + eta)));
+        degrees[i] += w;
+        degrees[j] += w;
+    }
+    let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
+    for (i, row) in rows.iter_mut().enumerate() {
+        row.push((i, degrees[i]));
+        row.sort_by_key(|&(j, _)| j);
+        for &(j, x) in row.iter() {
+            columns.push(j as u32);
+            values.push(x * d[i] * d[j]);
+        }
+        row_ptrs.push(columns.len() as u32);
+    }
+    (row_ptrs, columns, values)
+}
+
+/// Settled within 16ε, then `F·A·F` rounds a few ε more: this grid's 17.3ε is rounding, not a deficit. The singular wide-weight grid left Noda steps no budget to settle in until they handed over near it.
+#[rstest]
+#[case::grid(dld(22 * 22, &grid(22), 1e-3, 30))]
+#[case::triangle(rounded_triangle())]
+#[case::singular_wide_weights(weighted_raised(30, 0.0, 18, 1))]
+fn a_settled_scaling_with_rounding_deficit_is_not_clamped(
+    #[case] (row_ptrs, columns, values): (Vec<u32>, Vec<u32>, Vec<f64>),
+) {
     let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
+    let block = only(&factor);
     assert_eq!(factor.clamps(), []);
-    assert!(!only(&factor).grounding_unproven());
+    assert!(!block.grounding_unproven());
+    assert!(block.floats());
 }
 
 /// Ranked by violation, a stall restart resumed from a stale best, adopted nothing, and gave up at 3568 of the budget.
@@ -162,6 +210,136 @@ fn a_settled_scaling_with_an_uneven_perron_vector_is_not_clamped() {
     let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
     assert_eq!(factor.clamps(), []);
     assert!(!only(&factor).grounding_unproven());
+}
+
+/// A `k × k` `D L D` grid with its edges raised by `1 + η`, so `ρ(N) = 1 + η`.
+fn raised(k: usize, eta: f64) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    let (row_ptrs, columns, mut values) = dld(k * k, &grid(k), 1.0, 0);
+    for (i, window) in row_ptrs.windows(2).enumerate() {
+        let row = window[0] as usize..window[1] as usize;
+        for (value, &j) in values[row.clone()].iter_mut().zip(&columns[row]) {
+            if j as usize != i {
+                *value *= 1.0 + eta;
+            }
+        }
+    }
+    (row_ptrs, columns, values)
+}
+
+/// The one clamp of an input under the default policy, as `(scaling, violation)`.
+fn only_clamp(
+    (row_ptrs, columns, values): (Vec<u32>, Vec<u32>, Vec<f64>),
+) -> (ScalingOutcome, f64) {
+    let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
+    let [clamp] = &factor.clamps()[..] else {
+        panic!("one clamp: {} of them", factor.clamps().len())
+    };
+    (clamp.scaling, clamp.violation)
+}
+
+/// `ρ(N) = 1 + η` within the tolerance: certified, its clamp `ρ − 1` up to rounding (#341). Below half the tolerance the first solve certified, then a shift pinned under `ρ` clamped `957×` that on grid64; above it the first shift sits under `ρ` and the block ended unsettled.
+/// Wide weights: a Noda `y` with a lower top but a larger eigen-residual was ranked out, leaving a clamp of `3.1 η`.
+#[rstest]
+#[case::below_half_tolerance(raised(64, 1e-12), 1e-12)]
+#[case::above_half_tolerance(raised(64, 7e-10), 7e-10)]
+#[case::wide_below_half_tolerance(raised(150, 1e-12), 1e-12)]
+#[case::wide_weights(weighted_raised(30, 3e-14, 12, 2), 3e-14)]
+fn a_block_within_the_tolerance_is_clamped_by_its_excess(
+    #[case] input: (Vec<u32>, Vec<u32>, Vec<f64>),
+    #[case] eta: f64,
+) {
+    let report = only_clamp(input);
+    assert_eq!(report.0, ScalingOutcome::Certified, "{report:?}");
+    assert!(report.1 <= eta + 64.0 * f64::EPSILON, "{report:?}");
+}
+
+/// `ρ(N) = 1 + η` just past the tolerance: refuted, its clamp near `ρ − 1`; a Rayleigh quotient that refuted inside a Noda step dropped it and kept a clamp of `2.4e-6`.
+#[test]
+fn a_block_just_past_the_tolerance_is_clamped_near_its_excess() {
+    let eta = 1.1e-9;
+    let report = only_clamp(raised(16, eta));
+    assert_eq!(report.0, ScalingOutcome::Refuted, "{report:?}");
+    assert!(report.1 <= 2.0 * eta, "{report:?}");
+}
+
+/// A `k × k` unit grid with its edges raised by `1 + η`, a path of `l` vertices hung from vertex 0 by weight `w`, each tail row's diagonal `4×` its off-diagonal sum, all as `D A D`: the tail's Perron components fall to `1e-21` and below, so `low` stays near `0.2`.
+fn dominant_tail(k: usize, l: usize, w: f64, eta: f64) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    let core = k * k;
+    let mut edges: Vec<(usize, usize, f64)> = grid(k)
+        .into_iter()
+        .map(|(i, j)| (i, j, 1.0 + eta))
+        .collect();
+    edges.extend((0..l).map(|t| {
+        (
+            if t == 0 { 0 } else { core + t - 1 },
+            core + t,
+            if t == 0 { w } else { 1.0 },
+        )
+    }));
+    let n = core + l;
+    let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+    let mut sums = vec![0.0; n];
+    for &(i, j, x) in &edges {
+        rows[i].push((j, -x));
+        rows[j].push((i, -x));
+        let weight = if i < core && j < core { 1.0 } else { x };
+        sums[i] += weight;
+        sums[j] += weight;
+    }
+    let d: Vec<f64> = (0..n)
+        .map(|i| 1.0 + ((7919 * i) % 1000) as f64 / 1000.0 - 0.5)
+        .collect();
+    let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
+    for (i, row) in rows.iter_mut().enumerate() {
+        row.push((i, if i < core { sums[i] } else { 4.0 * sums[i] }));
+        row.sort_by_key(|&(j, _)| j);
+        for &(j, x) in row.iter() {
+            columns.push(j as u32);
+            values.push(x * d[i] * d[j]);
+        }
+        row_ptrs.push(columns.len() as u32);
+    }
+    (row_ptrs, columns, values)
+}
+
+/// `ρ(N) = 1 + η` proven past the band, whatever eigen-residual some `y` shows: not settled, and certified where clamped. Codex's `f32` star `N = [[0, a, a], [a, 0, 0], [a, 0, 0]]` has a `y` with eigen-residual under the band and `ρ − 1 = 2.09e-6`; the grid's dominant tail kept `low` near `0.2`, so the endgame ran to the budget.
+#[test]
+fn a_block_proven_past_the_band_is_not_settled() {
+    let a = 0.707_108_259_201_049_8_f64 as f32;
+    let values = [1.0, -a, -a, -a, 1.0, -a, 1.0];
+    let policy = ScalingPolicy::new(1e-3, 2048).expect("a valid policy");
+    let star =
+        reduce_with(&[0, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values, policy).expect("admitted");
+    // Within `f32`'s row band, so no clamp: only the float decision is left unproven.
+    assert_eq!(star.clamps(), []);
+    assert!(only(&star).grounding_unproven());
+    let eta = 3e-10;
+    let (row_ptrs, columns, values) = dominant_tail(30, 40, 1e-12, eta);
+    let tail = reduce(&row_ptrs, &columns, &values).expect("admitted");
+    let [clamp] = &tail.clamps()[..] else {
+        panic!("one clamp: {} of them", tail.clamps().len())
+    };
+    let report = (clamp.scaling, clamp.violation);
+    assert_eq!(report.0, ScalingOutcome::Certified, "{report:?}");
+    assert!(report.1 <= eta + 64.0 * f64::EPSILON, "{report:?}");
+    assert!(only(&tail).grounding_unproven());
+    // Codex's `f64` triangle, `ρ − 1 ≈ 4.9e-15`: its floor passed `1 + band` at step 86 of an endgame that ran to the budget.
+    let (x, y, z) = (
+        -0.730_319_049_786_269_3,
+        -0.067_578_704_168_472_17,
+        -0.632_190_571_245_819_9,
+    );
+    let values = [1.0, x, y, x, 1.0, z, y, z, 1.0];
+    let policy = ScalingPolicy::new(1e-9, 1024).expect("a valid policy");
+    let triangle = reduce_with(&[0, 3, 6, 9], &[0, 1, 2, 0, 1, 2, 0, 1, 2], &values, policy)
+        .expect("admitted");
+    let [clamp] = &triangle.clamps()[..] else {
+        panic!("one clamp: {} of them", triangle.clamps().len())
+    };
+    let report = (clamp.scaling, clamp.violation);
+    assert_eq!(report.0, ScalingOutcome::Certified, "{report:?}");
+    assert!(report.1 <= 4.9e-15 + 64.0 * f64::EPSILON, "{report:?}");
+    assert!(only(&triangle).grounding_unproven());
 }
 
 /// `f32` rounds a singular block's `ρ(N)` ulps past `1`, so only a bracket within the `16ε` band certifies; under `1e-9` these spent 2048 steps and reported.
