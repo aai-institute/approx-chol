@@ -219,7 +219,10 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
                 .map(|k| (steps.neighbors[k], split, steps.coefficients[k]));
             fill.clear();
             let d = clique.pivot(draws, row, fill, sign);
-            steps.overwrite(&mut written, v, (d, clique.shares(d)), slots);
+            steps.write(v, (d, clique.shares(d)), slots, |steps, neighbor, share| {
+                (steps.neighbors[written], steps.coefficients[written]) = (neighbor, share);
+                written += 1;
+            });
             staged.extend_from_slice(fill);
             // So past 2^16 pairs the staging stays within twice its merged size.
             if staged.len() >= (2 * merged).max(1 << 16) {
@@ -431,7 +434,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
     }
 
-    /// Headers for `n` steps over `neighbors` and `coefficients` as rows that [`overwrite`](Self::overwrite) reads before it writes.
+    /// Headers for `n` steps over `neighbors` and `coefficients` as rows that each step reads before it writes.
     fn over_rows(n: usize, neighbors: Vec<I>, coefficients: Vec<T>) -> Self {
         Self {
             headers: Vec::with_capacity(n),
@@ -455,43 +458,31 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
     }
 
-    /// As [`push`](Self::push), but from `written` on, which it advances: never past the row just read.
-    fn overwrite(
-        &mut self,
-        written: &mut usize,
-        vertex: usize,
-        (d, shares): (f64, impl Iterator<Item = (I, f64)>),
-        slots: usize,
-    ) {
-        let start = *written;
-        for (neighbor, share) in shares.filter(|&(j, _)| j.index() < slots) {
-            self.neighbors[*written] = neighbor;
-            self.coefficients[*written] = narrow(share);
-            *written += 1;
-        }
-        self.headers.push(StepHeader {
-            vertex: I::from_index(vertex),
-            len: I::from_index(*written - start),
-            inverse_degree: narrow(1.0 / d),
+    /// The column's step, its entries appended.
+    fn push(&mut self, vertex: usize, column: (f64, impl Iterator<Item = (I, f64)>), slots: usize) {
+        self.write(vertex, column, slots, |steps, neighbor, share| {
+            steps.neighbors.push(neighbor);
+            steps.coefficients.push(share);
         });
     }
 
-    /// Each share `w/d` and `D⁻¹` rounded once from `f64`: no share is derived from the others, so none cancels (#275, #302); only `M`'s `slots` take one, not the ground past them.
-    fn push(
+    /// The column's step, each entry stored by `put`: each share `w/d` and `D⁻¹` rounded once from `f64`, so no share is derived from the others and none cancels (#275, #302); only `M`'s `slots` take one, not the ground past them.
+    fn write(
         &mut self,
         vertex: usize,
         (d, shares): (f64, impl Iterator<Item = (I, f64)>),
         slots: usize,
+        mut put: impl FnMut(&mut Self, I, T),
     ) {
-        let start = self.neighbors.len();
+        let mut len = 0;
         for (neighbor, share) in shares.filter(|&(j, _)| j.index() < slots) {
-            self.neighbors.push(neighbor);
-            self.coefficients.push(narrow(share));
+            put(self, neighbor, narrow(share));
+            len += 1;
         }
         // Finite, as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
-            len: I::from_index(self.neighbors.len() - start),
+            len: I::from_index(len),
             inverse_degree: narrow(1.0 / d),
         });
     }
