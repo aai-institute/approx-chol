@@ -11,6 +11,7 @@ use rstest::rstest;
 use crate::common::bipartite::Bipartite;
 use crate::common::bits::bits;
 use crate::common::disjoint::Disjoint;
+use crate::common::graph::{Edge, Graph};
 use crate::common::grid::grid;
 use crate::common::lcg::Lcg;
 use crate::common::scaling::dld;
@@ -181,4 +182,50 @@ fn gram_blocks_are_bit_identical_across_thread_counts(
     #[case] stops: bool,
 ) {
     threads::across_pools(|| gram_blocks(sizes, policy, stops));
+}
+
+/// A star's Laplacian on `2¹⁹ + 13` rows, so one column's projection already splits across threads; a leaf solves to the center's value plus its own entry, so `b`'s `2⁻²¹`-scale entries carry both projections' sums to the solution, and its `±2⁶⁰` pairs far apart make those sums' last bits follow the summation tree: each solve and each column of a four-column apply agree bit for bit across budgets, `Count(5)` among them.
+#[test]
+fn a_large_floating_block_projects_alike_across_thread_counts() {
+    use approx_chol::{factorize, ApproxInverse};
+
+    let n = (1 << 19) + 13;
+    let star = (1..n).map(|leaf| Edge::negative(0, leaf, 1.0));
+    let graph = Graph::new(n, star.collect());
+    let (ptrs, columns, values) = graph.csr(false);
+    let csr = CsrRef::new(n, &ptrs, &columns, &values).unwrap();
+    let factor: ApproxInverse = factorize(csr).unwrap();
+    assert!(factor.components().all(|c| c.floats()));
+    let mut lcg = Lcg(0x517);
+    let mut b: Vec<f64> = (0..n)
+        .map(|_| (lcg.unit() - 0.5) * 2f64.powi(-20))
+        .collect();
+    for k in 0..64 {
+        let big = (lcg.unit() + 1.0) * 2f64.powi(60);
+        b[k * 4099 + 5] = big;
+        b[n - 1 - k * 4099] = -big;
+    }
+    let five = Threads::Count(NonZeroUsize::new(5).unwrap());
+    let budgets = threads::BUDGETS.into_iter().chain([five]);
+    let scale = [1.0, -0.5, 0.0, 3.0];
+    threads::across_pools(|| {
+        let alone = scale.map(|s| {
+            let scaled: Vec<f64> = b.iter().map(|&v| s * v).collect();
+            bits(&factor.solve_at(&scaled, threads::ONE).unwrap())
+        });
+        for threads in budgets.clone() {
+            assert_eq!(
+                bits(&factor.solve_at(&b, threads).unwrap()),
+                alone[0],
+                "{threads:?}"
+            );
+            let mut rows: Vec<[f64; 4]> = b.iter().map(|&v| scale.map(|s| s * v)).collect();
+            factor.apply(&mut rows, threads).unwrap();
+            for (j, alone) in alone.iter().enumerate() {
+                let column: Vec<f64> = rows.iter().map(|row| row[j]).collect();
+                assert_eq!(&bits(&column), alone, "column {j}, {threads:?}");
+            }
+        }
+        alone
+    });
 }
