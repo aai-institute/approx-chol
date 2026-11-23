@@ -143,21 +143,15 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
                 (m, RowSums { diagonal, abs }, vector)
             }
         };
-        let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
-        let clamped = (vector)
-            .past_band(
-                widen(T::epsilon()),
-                deficits,
-                rows.diagonal.iter().map(|&d| widen(d)),
-                row_degrees(rows.diagonal.len(), m.off_diagonal()),
-            )
-            .map_or(0.0, |past| past.fold(0.0, f64::max));
-        let folded = Folded {
+        let mut folded = Folded {
             m,
             rows,
             vector,
-            clamped,
+            clamped: 0.0,
         };
+        let RowSums { diagonal, abs } = &folded.rows;
+        let deficits = (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(s) - widen(d));
+        folded.clamped = (folded.past_band(deficits)).map_or(0.0, |past| past.fold(0.0, f64::max));
         match balance {
             Balance::Balanced => Ok(Settling::Pending(folded)),
             Balance::Frustrated => Ok(Settling::Settled(folded.frustrated()?)),
@@ -227,6 +221,16 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
 }
 
 impl<T: Real, I: Index> Folded<'_, T, I> {
+    /// Each row's `excess_i / m_ii` past its band, as [`ScaleVector::past_band`] reads `M`'s rows.
+    fn past_band<'a>(
+        &'a self,
+        excess: impl Iterator<Item = f64> + Clone + 'a,
+    ) -> Option<impl Iterator<Item = f64> + 'a> {
+        let diagonal = self.rows.diagonal.iter().map(|&d| widen(d));
+        let degrees = row_degrees(diagonal.len(), self.m.off_diagonal());
+        (self.vector).past_band(widen(T::epsilon()), excess, diagonal, degrees)
+    }
+
     /// The one float-or-ground rule. A row's surplus is rounding within its band, [`ScaleVector::past_band`]: a residue `(M1)_i` at its `k_i` entries, less the block's clamp, rounding too; a stated ground at none, and only where its residue is positive. `M` floats in the singular band with no stated ground and no residue past its band, or on a certificate; grounded, it keeps the rows past their band, or every residue when none is, as a balanced block needs a ground.
     fn settle<S: Surplus<T, I>>(
         self,
@@ -304,9 +308,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let ground = (surplus.clone().zip(abs).enumerate())
             .map(|(i, (s, &abs))| s > widen(abs) || stated(i, s));
         let excess = (surplus.zip(diagonal)).map(|(s, &d)| s - self.clamped * widen(d));
-        let degrees = row_degrees(diagonal.len(), self.m.off_diagonal());
-        let diagonal_f64 = diagonal.iter().map(|&d| widen(d));
-        let past = (self.vector).past_band(widen(T::epsilon()), excess, diagonal_f64, degrees);
+        let past = self.past_band(excess);
         match past {
             // A floating block's rows: one scan, as the mask is built only once a row holds.
             None if !ground.clone().any(|g| g) => None,
