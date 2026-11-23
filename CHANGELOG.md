@@ -7,9 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-24
+
+The elimination order changed, so factors and solutions differ from 0.8.1 on most inputs. API and persisted format are unchanged.
+
 ### Changed
 
-- A singular block's solve projects `F·1` out by sums over fixed 32 768-row chunks, split across threads once a pass holds 2^19 values: a multi-column solve of a large block runs up to 1.85x faster on 8 threads. Solutions of blocks past 32 768 rows may differ from before in the last bits; they still match across thread counts and column by column.
+- The order merges fill that lands on a pair already held: PCG iterations −12% (geomean), banded 55 → 14, fixest 5M 39 → 17.5. ([#501], [#503], [#504])
+- Local minima are eliminated first, from their input rows: fixed-effects and power-law builds take 15–27% fewer instructions and 40–80% less peak memory. ([#502], [#527])
+- That phase factors in place, cutting peak memory a further 12–35%. ([#523])
+- Faster setup: factor-width 10–18% and CSR 2–3% fewer instructions; fill sampling 6–29% less wall time. ([#510], [#514], [#515], [#520])
+- Fill-heavy builds use up to 11% less peak memory and up to 52% less macOS footprint. ([#509])
+- A block elimination no longer stores its transpose (−12 B per entry); 1-thread factor-width solves cost up to 10% more. ([#497])
+- Multi-column solves of large singular blocks run up to 1.85x faster on 8 threads; last bits may change past 32 768 rows. ([#517])
+- Floating bipartite solves drop a redundant gauge shift; last bits change. ([#499])
+
+### Fixed
+
+- Dominance scaling no longer inflates the clamp when ρ ∈ (1, 1 + tol] (was up to ~10³ × ρ − 1). ([#341])
+- An exact Gram null vector no longer reports a clamp from its own rounding. ([#210])
+- Such a block no longer drops a real ground inside its rounding clamp. ([#513])
+- Signed AC2: a cancelled pivot's ground edge gets the split's copies. ([#507])
+
+### Known regressions
+
+Measured against 0.8.1:
+
+- Builds of AKM, random and power-law graphs take up to 30% more instructions (AKM 1.28x wall on 8 threads, random degree-10 1.11x), at unchanged PCG iterations. ([#501], [#502], [#503])
+- Grids and floating panels take 1–5 more PCG iterations (grid 1000²: 42 → 47). ([#501], [#503])
+- Scaling: 4 of 180 measured exactly singular wide-weight grids now ground instead of floating, near-band hub stars can end unproven after up to 4.7x the work, and window blocks take up to 2x the build work for their tighter clamps. ([#341], [#522])
 
 ## [0.8.1] - 2026-11-11
 
@@ -276,7 +302,10 @@ for graph Laplacians in Rust with Python bindings.
 - Multi-platform CI with coverage reporting
 - Dual MIT license for Rust crate and Python package
 
-[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/aai-institute/approx-chol/releases/tag/v0.8.2
+[0.8.1]: https://github.com/aai-institute/approx-chol/releases/tag/v0.8.1
+[0.8.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.8.0
 [0.7.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.7.0
 [0.6.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.6.0
 [0.5.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.5.0
@@ -352,3 +381,22 @@ for graph Laplacians in Rust with Python bindings.
 [#435]: https://github.com/aai-institute/approx-chol/issues/435
 [#437]: https://github.com/aai-institute/approx-chol/issues/437
 [#472]: https://github.com/aai-institute/approx-chol/issues/472
+[#210]: https://github.com/aai-institute/approx-chol/issues/210
+[#341]: https://github.com/aai-institute/approx-chol/issues/341
+[#497]: https://github.com/aai-institute/approx-chol/issues/497
+[#499]: https://github.com/aai-institute/approx-chol/issues/499
+[#501]: https://github.com/aai-institute/approx-chol/issues/501
+[#502]: https://github.com/aai-institute/approx-chol/issues/502
+[#503]: https://github.com/aai-institute/approx-chol/issues/503
+[#504]: https://github.com/aai-institute/approx-chol/issues/504
+[#507]: https://github.com/aai-institute/approx-chol/issues/507
+[#509]: https://github.com/aai-institute/approx-chol/issues/509
+[#510]: https://github.com/aai-institute/approx-chol/issues/510
+[#513]: https://github.com/aai-institute/approx-chol/issues/513
+[#514]: https://github.com/aai-institute/approx-chol/issues/514
+[#515]: https://github.com/aai-institute/approx-chol/issues/515
+[#517]: https://github.com/aai-institute/approx-chol/issues/517
+[#520]: https://github.com/aai-institute/approx-chol/issues/520
+[#522]: https://github.com/aai-institute/approx-chol/issues/522
+[#523]: https://github.com/aai-institute/approx-chol/issues/523
+[#527]: https://github.com/aai-institute/approx-chol/issues/527

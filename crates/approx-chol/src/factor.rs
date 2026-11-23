@@ -978,6 +978,7 @@ mod budget {
     }
 
     /// In a pool of seven, a count's build never has more of its threads in a loop's items at once; the pool's whole budget is seen to.
+    /// Past three threads only where the machine runs four at once: a 3-vCPU runner caps what any build can show (#519).
     #[test]
     fn a_build_runs_at_most_its_count_of_threads() {
         let pool = pool(7);
@@ -991,9 +992,11 @@ mod budget {
                 widest = widest.max(probe::peak(|| drop(pool.install(|| build(Threads::All)))));
             });
         }
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
+        let floor = if cores >= 4 { 3 } else { 1 };
         assert!(
-            widest > 3,
-            "the probe saw at most {widest} threads under All"
+            widest > floor,
+            "the probe saw at most {widest} threads under All on {cores} cores"
         );
     }
 }
