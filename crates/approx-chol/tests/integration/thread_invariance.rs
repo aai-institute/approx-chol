@@ -229,3 +229,43 @@ fn a_large_floating_block_projects_alike_across_thread_counts() {
         alone
     });
 }
+
+/// Twelve blocks, people each joined to two firms at random weights, every third grounded: 1500 people of 60 firms, whose local minima pivot first, alternate with 60 of 4 that leave their buffers to their task's next block. Past the block split, the factor and its solve agree bit for bit across budgets.
+#[test]
+fn phased_blocks_are_bit_identical_across_thread_counts() {
+    let (mut lcg, mut graph) = (Lcg(0x9a5), Graph::new(0, Vec::new()));
+    for k in 0..12 {
+        let ((people, firms), at) = ([(60, 4), (1500, 60)][k % 2], graph.n);
+        for person in at..at + people {
+            for _ in 0..2 {
+                let firm = at + people + lcg.next_u64() as usize % firms;
+                graph
+                    .edges
+                    .push(Edge::negative(person, firm, 0.5 + lcg.unit()));
+            }
+        }
+        graph.n += people + firms;
+        graph.ground.resize(graph.n, 0.0);
+        graph.ground[at] = if k % 3 == 0 { 1.0 } else { 0.0 };
+    }
+    let (ptrs, columns, values) = graph.csr(false);
+    let csr = CsrRef::new(graph.n, &ptrs, &columns, &values).unwrap();
+    let b: Vec<f64> = (0..graph.n)
+        .map(|i| ((i * 7919) % 101) as f64 / 50.0 - 1.0)
+        .collect();
+    let build = |threads| {
+        (Sgdd::reduce(csr, ScalingPolicy::default(), threads).unwrap())
+            .factor(Config::default(), threads)
+    };
+    threads::across_pools(|| {
+        let factor = build(threads::ONE);
+        let (shown, solved) = (format!("{factor:?}"), bits(&factor.solve(&b).unwrap()));
+        for threads in threads::BUDGETS {
+            let built = build(threads);
+            assert_eq!(format!("{built:?}"), shown, "built at {threads:?}");
+            let at = bits(&built.solve_at(&b, threads).unwrap());
+            assert_eq!(at, solved, "solved at {threads:?}");
+        }
+        (shown, solved)
+    });
+}
