@@ -97,6 +97,11 @@ impl<T: Real, I: Index> Sdd<T, I> {
         }
     }
 
+    /// Whether [`grounded_edges`](Self::grounded_edges) gives row `k` an edge to the ground.
+    pub(super) fn grounds(&self, k: usize) -> bool {
+        self.surplus.edge(k >> self.layout.copy_shift()).is_some()
+    }
+
     /// Its ground, the vertex past the slots, unless it floats: no pivot eliminates it, so `Σs` is never formed (within unchanged, grids +0-8% PCG iterations at 1-10 grounds).
     pub(super) fn ground(&self) -> Option<usize> {
         (!self.floats()).then(|| self.n())
