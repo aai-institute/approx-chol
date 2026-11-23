@@ -181,6 +181,58 @@ fn compensated_sum<X: Copy, W: Batch<f64>>(x: &[X], term: impl Fn(usize, X) -> W
     sum.add(carry)
 }
 
+/// Terms a task of [`chunked_sum`] sums alone; fixed, so no sum's bits depend on the threads.
+const SUM_CHUNK: usize = 1 << 15;
+
+/// Values, terms times right-hand sides, a pass over `x` splits into tasks from: below, 100k-row single sums lost 8–13% to the split.
+const SPLIT_VALUES: usize = 1 << 19;
+
+/// `threads` for a pass over `values` past [`SPLIT_VALUES`], else the calling thread alone.
+fn split(values: usize, threads: Threads) -> Threads {
+    match values >= SPLIT_VALUES {
+        true => threads,
+        false => threads::ONE,
+    }
+}
+
+/// [`compensated_sum`] up to [`SUM_CHUNK`] terms; past it, halves cut at chunk boundaries summed apart, each lane's partial sums merged by TwoSum: one tree for every thread count.
+fn chunked_sum<X: Copy + Sync, W: Batch<f64>>(
+    x: &[X],
+    term: impl Fn(usize, X) -> W + Sync,
+    threads: Threads,
+) -> W {
+    fn tree<X: Copy + Sync, W: Batch<f64>>(
+        x: &[X],
+        start: usize,
+        term: &(impl Fn(usize, X) -> W + Sync),
+        threads: Threads,
+    ) -> Sum2<W> {
+        if x.len() <= SUM_CHUNK {
+            return Sum2::of(x, |i, x| term(start + i, x));
+        }
+        let mid = x.len().div_ceil(SUM_CHUNK) / 2 * SUM_CHUNK;
+        let (left, right) = x.split_at(mid);
+        let (left, right) = match threads.tasks() > 1 {
+            true => {
+                let half = threads.within_task(2);
+                rayon::join(
+                    || tree(left, start, term, half),
+                    || tree(right, start + mid, term, half),
+                )
+            }
+            false => (
+                tree(left, start, term, threads),
+                tree(right, start + mid, term, threads),
+            ),
+        };
+        left.merge(right)
+    }
+    match x.len() <= SUM_CHUNK {
+        true => compensated_sum(x, term),
+        false => tree(x, 0, &term, split(x.len() * W::LANES, threads)).total(),
+    }
+}
+
 /// Ogita–Rump–Oishi Sum2 (SISC 26(6), 2005) in eight fixed TwoSum lanes: off by at most `ε|Σx| + (nε)² Σ|x|`.
 #[derive(Clone, Copy)]
 struct Sum2<W = f64> {
@@ -231,6 +283,18 @@ impl<W: Batch<f64>> Sum2<W> {
         }
     }
 
+    /// Both sums' terms, `other`'s after this one's: each lane's sums added by TwoSum, its error carried.
+    fn merge(mut self, other: Self) -> Self {
+        let lanes = (self.sums.iter_mut().zip(&mut self.carries))
+            .zip(other.sums.iter().zip(&other.carries));
+        for ((sum, carry), (&x, &c)) in lanes {
+            let error;
+            (*sum, error) = two_sum(*sum, x);
+            *carry = carry.add(c).add(error);
+        }
+        self
+    }
+
     fn total(&self) -> W {
         let first = (self.sums[0], W::zero());
         let (sum, carry) = self.sums[1..].iter().fold(first, |(sum, carry), &x| {
@@ -252,7 +316,8 @@ fn two_sum<W: Batch<f64>>(a: W, b: W) -> (W, W) {
 
 #[cfg(test)]
 mod tests {
-    use super::{argmax, compensated_sum, Sum2};
+    use super::{argmax, chunked_sum, compensated_sum, Sum2, Threads, SPLIT_VALUES, SUM_CHUNK};
+    use crate::threads::ONE;
 
     /// The gauge pin's choice, which a factor's bits follow: a tie with the last entry keeps the last, else the first of the earlier maxima; a NaN never wins.
     #[test]
@@ -297,5 +362,36 @@ mod tests {
         );
         let sum = Sum2::of(&values, |_, x| x).total();
         assert!((sum - exact).abs() <= bound, "{sum} vs {exact}");
+    }
+
+    /// Past one chunk, `±1e16` pairs split across chunk boundaries: the merge keeps the `1.0`s, and every budget sums alike; at one chunk it is the plain compensated sum.
+    #[test]
+    fn chunked_sum_keeps_its_terms_and_bits_under_any_threads() {
+        let n = 2 * SPLIT_VALUES + 13;
+        let term = |i: usize| match i % SUM_CHUNK {
+            0 => 1e16,
+            1 => -1e16,
+            _ => 1.0 / 1024.0,
+        };
+        let values: Vec<f64> = (0..n).map(|i| term(i + SUM_CHUNK - 1)).collect();
+        let exact = values.iter().filter(|x| x.abs() < 1.0).count() as f64 / 1024.0;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let sums: Vec<f64> = [ONE, Threads::All]
+            .map(|threads| pool.install(|| chunked_sum(&values, |_, x| x, threads)))
+            .into();
+        assert_eq!(sums[0].to_bits(), sums[1].to_bits());
+        assert!(
+            (sums[0] - exact).abs() <= 2.0 * f64::EPSILON * exact,
+            "{} vs {exact}",
+            sums[0]
+        );
+        let short = &values[..SUM_CHUNK];
+        assert_eq!(
+            chunked_sum(short, |_, x| x, Threads::All).to_bits(),
+            compensated_sum(short, |_, x| x).to_bits()
+        );
     }
 }
