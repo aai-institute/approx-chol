@@ -217,11 +217,13 @@ pub(super) fn relax<T: Real, I: Index>(
 ) -> Result<Relaxation<T>, usize> {
     let n = Normalized::new(off_diagonal, diagonal, threads);
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
-    let rounding =
-        (off_diagonal.degrees().into_iter().max().unwrap_or(0) + 3) as f64 * f64::EPSILON;
+    let rows: Box<[f64]> = (off_diagonal.degrees().into_iter())
+        .map(|k| (k + 3) as f64 * f64::EPSILON)
+        .collect();
+    let rounding = rows.iter().copied().fold(3.0 * f64::EPSILON, f64::max);
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
-    let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
+    let iteration = InverseIteration::new(&n, slack, band, rows, rounding, policy.max_iterations)?;
     let (y, vector) = iteration.run();
     positive(n.scales(&y), vector)
 }
