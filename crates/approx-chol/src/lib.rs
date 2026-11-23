@@ -364,30 +364,30 @@ mod tests {
         assert!((sum - exact).abs() <= bound, "{sum} vs {exact}");
     }
 
-    /// Past one chunk, `±1e16` pairs split across chunk boundaries: the merge keeps the `1.0`s, and every budget sums alike; at one chunk it is the plain compensated sum.
+    /// Lane 0 holds `1.0` in one chunk, `1e16` in the next and `−1e16` in the one after, across the merge of their pairs: the first merge rounds the `1.0` off, so only its TwoSum error keeps it; every budget sums alike; at one chunk it is the plain compensated sum.
     #[test]
     fn chunked_sum_keeps_its_terms_and_bits_under_any_threads() {
         let n = 2 * SPLIT_VALUES + 13;
-        let term = |i: usize| match i % SUM_CHUNK {
-            0 => 1e16,
-            1 => -1e16,
-            _ => 1.0 / 1024.0,
-        };
-        let values: Vec<f64> = (0..n).map(|i| term(i + SUM_CHUNK - 1)).collect();
-        let exact = values.iter().filter(|x| x.abs() < 1.0).count() as f64 / 1024.0;
+        let mut values: Vec<f64> = (0..n).map(|i| (i % 8 != 0) as u8 as f64).collect();
+        for quad in (0..n / SUM_CHUNK / 2).step_by(4) {
+            for (k, x) in [1.0, 1e16, -1e16].into_iter().enumerate() {
+                values[(quad + k) * SUM_CHUNK] = x;
+            }
+        }
+        let exact = (n - n.div_ceil(8)) as f64 + (n / SUM_CHUNK / 2).div_ceil(4) as f64;
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
             .build()
             .unwrap();
-        let sums: Vec<f64> = [ONE, Threads::All]
+        let three = Threads::Count(std::num::NonZeroUsize::new(3).unwrap());
+        let sums: Vec<f64> = [ONE, three, Threads::All]
             .map(|threads| pool.install(|| chunked_sum(&values, |_, x| x, threads)))
             .into();
-        assert_eq!(sums[0].to_bits(), sums[1].to_bits());
         assert!(
-            (sums[0] - exact).abs() <= 2.0 * f64::EPSILON * exact,
-            "{} vs {exact}",
-            sums[0]
+            sums.iter().all(|sum| sum.to_bits() == sums[0].to_bits()),
+            "{sums:?}"
         );
+        assert_eq!(sums[0], exact);
         let short = &values[..SUM_CHUNK];
         assert_eq!(
             chunked_sum(short, |_, x| x, Threads::All).to_bits(),
