@@ -105,6 +105,11 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         self.a.len()
     }
 
+    /// Whether `a` ascends, so a bipartite `V`'s columns come grouped by left vertex in order.
+    pub(crate) fn left_ends_ascend(&self) -> bool {
+        self.a.is_sorted()
+    }
+
     /// Each column in order; write `visit` as `#[inline(always)] |column| …` (outlined: 1.6-1.9x).
     #[inline(always)]
     pub(crate) fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
