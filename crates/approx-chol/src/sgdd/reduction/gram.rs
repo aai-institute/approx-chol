@@ -1,4 +1,5 @@
 use std::cell::LazyCell;
+use std::ops::Deref;
 use std::sync::OnceLock;
 
 use num_traits::PrimInt;
@@ -48,8 +49,12 @@ impl<T: Real, I: Index> Reduced<T, I> {
             })?;
             // `u` freed before the column pass: only the certified set outlives the scaling.
             let read = nulls.into_inner().map(|(_, certified)| certified);
-            let certified = LazyCell::new(|| read.unwrap_or_else(|| null_vectors(v, components).1));
-            ground_or_float(v, signed, &certified)
+            let certified = LazyCell::new(|| {
+                read.unwrap_or_else(|| null_vectors::<f64, _, _, _>(v, components).1)
+            });
+            // `ρ` in `u = u*(1 + ρ)` by vertex, walked again only once a null-scaled row is past its band.
+            let rho = LazyCell::new(|| null_roundings(v, components));
+            ground_or_float(v, signed, &certified, &rho)
         })
     }
 }
@@ -61,6 +66,8 @@ struct GramSurplus<'a, I, F> {
     stated: &'a [f64],
     /// Sorted lowest vertices of certified components, built on first use.
     certified: &'a LazyCell<Vec<I>, F>,
+    /// Each vertex's `ρ` in its null vector `u = u*(1 + ρ)`, built on first use.
+    rho: &'a dyn Deref<Target = Vec<f64>>,
 }
 
 impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_, I, F> {
@@ -87,6 +94,10 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
         })
     }
 
+    fn reported(&self, folded: &Folded<'_, T, I>) -> f64 {
+        folded.beyond_null_rounding(|| &self.rho[..])
+    }
+
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
     fn grounds(&self, folded: &Folded<'_, T, I>) -> Grounding<T> {
         Grounding::of(
@@ -102,6 +113,7 @@ fn ground_or_float<'p, T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     settling: Cut<'p, I, T, Settling<'p, T, I>>,
     certified: &LazyCell<Vec<I>, impl FnOnce() -> Vec<I>>,
+    rho: &dyn Deref<Target = Vec<f64>>,
 ) -> Result<Cut<'p, I, T, IrreducibleBlock<T, I>>, BuildError> {
     let blocks = settling.blocks();
     // By vertex, sized only when a block is folded: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
@@ -166,6 +178,7 @@ fn ground_or_float<'p, T: Real, J: PrimInt, I: Index>(
         surplus: &surplus,
         stated: &stated,
         certified,
+        rho,
     };
     settling.try_map(|c, block| match block {
         Settling::Pending(folded) => folded.settle((ones[c], trace[c]), &gram),
@@ -173,11 +186,25 @@ fn ground_or_float<'p, T: Real, J: PrimInt, I: Index>(
     })
 }
 
-/// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is, and the sorted lowest vertices of the components that have one: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
-fn null_vectors<T: Real, J: PrimInt, I: Index>(
+/// Per vertex, `ρ` in `u = u*(1 + ρ)` of [`null_vectors`]' `u`: its walk again, on the same bits, each ratio tracked.
+fn null_roundings<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     components: &Components<I, T>,
-) -> (Vec<f64>, Vec<I>) {
+) -> Vec<f64> {
+    let (u, _) = null_vectors::<Tracked, T, J, I>(v, components);
+    // Collected afresh: in place, it would keep `u`'s twice-as-large allocation.
+    u.iter().map(|u| u.rounding).collect()
+}
+
+/// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is, and the sorted lowest vertices of the components that have one: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
+fn null_vectors<P, T: Real, J: PrimInt, I: Index>(
+    v: FactorWidth2<'_, T, J>,
+    components: &Components<I, T>,
+) -> (Vec<P>, Vec<I>)
+where
+    P: Potential<Link = Ratio<P>> + From<f64> + Into<f64>,
+    Ratio<P>: Into<P>,
+{
     let (n, coupled) = (v.n(), components.coupled.len());
     // Lone and dead vertices share one doomed label: each is dead or definite, never a candidate.
     let mut component = vec![I::from_index(coupled); n];
@@ -193,7 +220,7 @@ fn null_vectors<T: Real, J: PrimInt, I: Index>(
     }
     let mut alive = coupled;
     let tolerance = widen(T::epsilon()).sqrt();
-    let mut forest = Forest::<I, f64>::new(n);
+    let mut forest = Forest::<I, P>::new(n);
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {
@@ -203,7 +230,8 @@ fn null_vectors<T: Real, J: PrimInt, I: Index>(
             let Some(c) = coupling(&column, &component) else {
                 return;
             };
-            let k = -widen(column.v_a) / widen(column.v_b);
+            let (num, den) = (P::from(-widen(column.v_a)), P::from(widen(column.v_b)));
+            let k: P = Ratio { num, den }.into();
             let (a, b) = (column.a.index(), column.b.index());
             if !doomed[c] && !join(&mut forest, a, b, k, tolerance) {
                 doomed[c] = true;
@@ -213,7 +241,7 @@ fn null_vectors<T: Real, J: PrimInt, I: Index>(
     );
     let u = (0..n)
         .map(|i| match doomed[component[i].index()] {
-            true => f64::NAN,
+            true => P::from(f64::NAN),
             false => forest.find(i).1,
         })
         .collect();
@@ -235,49 +263,109 @@ fn coupling<T: Real, I: Index>(column: &Column<T, I>, component: &[I]) -> Option
 }
 
 /// `u_b / u_a` across a link from `b` up to `a`, undivided: reversing swaps it exactly, and a closing cycle compares its halves.
-pub(in crate::sgdd) struct Ratio {
-    num: f64,
-    den: f64,
+pub(in crate::sgdd) struct Ratio<P> {
+    num: P,
+    den: P,
 }
 
-impl Ratio {
+impl<P: Into<f64>> Ratio<P> {
     fn agrees(self, tolerance: f64) -> bool {
-        (self.num - self.den).abs() <= tolerance * self.num.abs().max(self.den.abs())
+        let (num, den): (f64, f64) = (self.num.into(), self.den.into());
+        (num - den).abs() <= tolerance * num.abs().max(den.abs())
     }
 }
 
-impl From<Ratio> for f64 {
-    fn from(r: Ratio) -> Self {
+impl From<Ratio<f64>> for f64 {
+    fn from(r: Ratio<f64>) -> Self {
         r.num / r.den
     }
 }
 
 impl Potential for f64 {
     const ROOT: Self = 1.0;
-    type Link = Ratio;
+    type Link = Ratio<Self>;
     fn then(self, up: Self) -> Self {
         self * up
     }
-    fn reversed(Ratio { num, den }: Ratio) -> Ratio {
+    fn reversed(Ratio { num, den }: Ratio<Self>) -> Ratio<Self> {
+        Ratio { num: den, den: num }
+    }
+}
+
+/// Below it an operation's own rounding may underflow, so FMA no longer recovers it.
+const TRACKED_FLOOR: f64 = f64::MIN_POSITIVE / f64::EPSILON;
+
+/// A ratio of `u` as `f64` computes it, and its rounding to first order, `value = exact·(1 + rounding)`: FMA recovers each operation's own, `NaN` once one may have underflowed.
+#[derive(Clone, Copy)]
+struct Tracked {
+    value: f64,
+    rounding: f64,
+}
+
+impl From<f64> for Tracked {
+    fn from(value: f64) -> Self {
+        let rounding = 0.0;
+        Self { value, rounding }
+    }
+}
+
+impl From<Tracked> for f64 {
+    fn from(x: Tracked) -> Self {
+        x.value
+    }
+}
+
+impl From<Ratio<Tracked>> for Tracked {
+    fn from(Ratio { num, den }: Ratio<Tracked>) -> Self {
+        let value = num.value / den.value;
+        let own = match value.abs().min(num.value.abs()) >= TRACKED_FLOOR {
+            true => value.mul_add(den.value, -num.value) / num.value,
+            false => f64::NAN,
+        };
+        let rounding = num.rounding - den.rounding + own;
+        Self { value, rounding }
+    }
+}
+
+impl Potential for Tracked {
+    const ROOT: Self = Self {
+        value: 1.0,
+        rounding: 0.0,
+    };
+    type Link = Ratio<Self>;
+    fn then(self, up: Self) -> Self {
+        let value = self.value * up.value;
+        let own = match value.abs() >= TRACKED_FLOOR {
+            true => -self.value.mul_add(up.value, -value) / value,
+            false => f64::NAN,
+        };
+        let rounding = self.rounding + up.rounding + own;
+        Self { value, rounding }
+    }
+    fn reversed(Ratio { num, den }: Ratio<Self>) -> Ratio<Self> {
         Ratio { num: den, den: num }
     }
 }
 
 /// Joins `u_b = k·u_a` in a forest whose potentials are `u_child / u_parent`; `false` on a cycle missing by more than `tolerance`, relative, or a ratio leaving the finite nonzero range.
-fn join<I: Index>(forest: &mut Forest<I, f64>, a: usize, b: usize, k: f64, tolerance: f64) -> bool {
+fn join<I: Index, P>(forest: &mut Forest<I, P>, a: usize, b: usize, k: P, tolerance: f64) -> bool
+where
+    P: Potential<Link = Ratio<P>> + Into<f64>,
+{
     // An overflowed `v_a/v_b` would compare `∞ ≤ tolerance·∞` and pass.
-    if !k.is_finite() {
+    if !k.into().is_finite() {
         return false;
     }
     let ((ra, xa), (rb, xb)) = (forest.find(a), forest.find(b));
     // `u_rb / u_ra = k·xa/xb`.
     let ratio = Ratio {
-        num: k * xa,
+        num: k.then(xa),
         den: xb,
     };
     if ra == rb {
         return ratio.agrees(tolerance);
     }
     let (_, stored) = forest.link(ra, rb, ratio);
+    let stored: f64 = stored.into();
     stored.is_finite() && stored != 0.0
 }

@@ -149,9 +149,8 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             vector,
             clamped: 0.0,
         };
-        let RowSums { diagonal, abs } = &folded.rows;
-        let deficits = (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(s) - widen(d));
-        folded.clamped = (folded.past_band(deficits)).map_or(0.0, |past| past.fold(0.0, f64::max));
+        folded.clamped =
+            (folded.past_band(folded.rows.deficits())).map_or(0.0, |past| past.fold(0.0, f64::max));
         match balance {
             Balance::Balanced => Ok(Settling::Pending(folded)),
             Balance::Frustrated => Ok(Settling::Settled(folded.frustrated()?)),
@@ -191,6 +190,10 @@ trait Surplus<T: Real, I: Index> {
     }
     /// `M`'s grounds once it does not float.
     fn grounds(&self, folded: &Folded<'_, T, I>) -> Grounding<T>;
+    /// The worst clamped deficit `M`'s clamp reports; all of it by default.
+    fn reported(&self, folded: &Folded<'_, T, I>) -> f64 {
+        folded.clamped
+    }
 }
 
 /// Read from `M`'s rows: `d_i − Σ_j |m_ij|`.
@@ -231,6 +234,28 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         (self.vector).past_band(widen(T::epsilon()), excess, diagonal, degrees)
     }
 
+    /// The worst clamped deficit past what `u`'s own rounding explains, `u = u*(1 + ρ)` with `ρ` by vertex: exact `u` balances each row, and `ρ` shifts row `i`'s `(Σ_j|m_ij| − m_ii)/m_ii` by `Σ_j w_j (ρ_j − ρ_i)`, `w_j = |m_ij|/m_ii`, to first order. Only a positive shift is taken out, so a row is reported only if past its band both with and without it; a negative shift leaves the row on its flat deficit, and an unknown one leaves it as it was.
+    fn beyond_null_rounding<'r>(&self, rho: impl FnOnce() -> &'r [f64]) -> f64 {
+        // `u`'s `f64` rounding, ~1e-14 on a 10⁵ ring, moves no row past a wider `ε`'s band.
+        let wide = widen(T::epsilon()) != f64::EPSILON;
+        if !matches!(self.vector, ScaleVector::NullVector) || self.clamped == 0.0 || wide {
+            return self.clamped;
+        }
+        let rho = rho();
+        let rho: Vec<f64> = (self.m.vertices().iter()).map(|v| rho[v.index()]).collect();
+        let mut pulled = vec![0.0; rho.len()];
+        self.m.off_diagonal().abs_times(&rho, &mut pulled);
+        let RowSums { diagonal, abs } = &self.rows;
+        // Less only a positive shift; `max` also takes a `NaN` shift as `0`.
+        let shifted = (self.rows.deficits().zip(abs).zip(pulled.iter().zip(&rho)))
+            .map(|((e, &s), (&p, &r))| e - (p - r * widen(s)).max(0.0));
+        let flat = (self.rows.deficits().zip(diagonal)).map(|(e, &d)| e / widen(d));
+        self.past_band(shifted).map_or(0.0, |past| {
+            (past.zip(flat).filter(|&(past, _)| past > 0.0))
+                .fold(0.0, |worst, (_, flat)| worst.max(flat))
+        })
+    }
+
     /// The one float-or-ground rule. A row's surplus is rounding within its band, [`ScaleVector::past_band`]: a residue `(M1)_i` at its `k_i` entries, less the block's clamp, rounding too; a stated ground at none, and only where its residue is positive. `M` floats in the singular band with no stated ground and no residue past its band, or on a certificate; grounded, it keeps the rows past their band, or every residue when none is, as a balanced block needs a ground.
     fn settle<S: Surplus<T, I>>(
         self,
@@ -248,9 +273,10 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
             true => None,
             false => self.ground_rows(surplus.residues(&self), stated.as_deref()),
         };
-        let (vector, clamped) = (self.vector, self.clamped);
+        let vector = self.vector;
         if certificate || (in_band && residues_float && (grounds.is_none() || certified())) {
-            return Ok((self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, clamped));
+            let report = surplus.reported(&self);
+            return Ok((self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, report));
         }
         let grounding = surplus.grounds(&self);
         if !grounding.is_grounded() {
@@ -261,11 +287,11 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
             });
             return Err(out_of_range(self.m.vertices(), row));
         }
-        let Self { m, .. } = self;
         let grounding = grounding
             .kept(grounds.as_deref())
-            .map_err(|i| out_of_range(m.vertices(), i))?;
-        Ok(m.block(Balance::Balanced, grounding, vector, clamped))
+            .map_err(|i| out_of_range(self.m.vertices(), i))?;
+        let report = surplus.reported(&self);
+        Ok((self.m).block(Balance::Balanced, grounding, vector, report))
     }
 
     /// A frustrated `M`, definite without a ground, keeping none of its rounding.
@@ -342,6 +368,13 @@ fn row_degrees<T: Real, I: Index>(
 fn out_of_range<I: Index>(vertices: &[I], i: usize) -> BuildError {
     BuildError::OutOfRange {
         vertex: vertices[i].index(),
+    }
+}
+
+impl<T: Real> RowSums<T> {
+    /// Each row's `Σ_j |m_ij| − m_ii`.
+    fn deficits(&self) -> impl Iterator<Item = f64> + Clone + '_ {
+        (self.diagonal.iter().zip(&self.abs)).map(|(&d, &s)| widen(s) - widen(d))
     }
 }
 
