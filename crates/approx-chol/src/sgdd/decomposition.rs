@@ -24,20 +24,36 @@ pub(super) struct Partitioned<A, I> {
     partition: Partition<I>,
 }
 
-/// Unions each nonzero above the diagonal: a checked `A` stored whole mirrors them below.
+/// A checked CSR `A` beside its count of stored entries above the diagonal.
+pub(super) struct Counted<'a, T: Clone, J: Clone> {
+    csr: Canonical<'a, T, J>,
+    above: usize,
+}
+
+/// Unions each nonzero above the diagonal, counting them for a whole input's block: a checked `A` stored whole mirrors them below.
 pub(super) fn of_csr<T: Real, J: PrimInt, I: Index>(
     csr: Canonical<'_, T, J>,
-) -> Partitioned<Canonical<'_, T, J>, I> {
+) -> Partitioned<Counted<'_, T, J>, I> {
     let mut sets = Forest::<I, ()>::new(csr.n());
+    let mut above = 0;
     for i in 0..csr.n() {
-        for (j, a) in csr.above(i) {
+        let row = csr.above(i);
+        above += row.len();
+        let mut root = sets.find(i).0;
+        for (j, a) in row {
             if a != T::zero() {
-                sets.union(i, j);
+                let (other, ()) = sets.find(j);
+                if other != root {
+                    root = sets.link(root, other, ()).0;
+                }
             }
         }
     }
     let partition = sets.into_partition();
-    Partitioned { a: csr, partition }
+    Partitioned {
+        a: Counted { csr, above },
+        partition,
+    }
 }
 
 /// The pivot of a vertex no entry couples: its diagonal, or its surplus where no diagonal is stored.
@@ -421,11 +437,15 @@ pub(super) struct RowSums<T> {
 
 impl<T: Real, J: PrimInt> Canonical<'_, T, J> {
     /// Upper rows in local order, columns remapped through `position`; a zero couples nothing, so it may name another component.
-    fn rows<I: Index>(&self, vertices: &[I], position: impl Fn(usize) -> I) -> Entries<T, I> {
+    fn rows<I: Index>(
+        &self,
+        vertices: &[I],
+        entries: usize,
+        position: impl Fn(usize) -> I,
+    ) -> Entries<T, I> {
         let mut diagonal = Vec::with_capacity(vertices.len());
         let mut ptrs = Vec::with_capacity(vertices.len() + 1);
         ptrs.push(0);
-        let entries = vertices.iter().map(|v| self.above(v.index()).len()).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         // `Σ_j |a_ij|` tallied while the row is at hand, saving `abs_row_sums`'s pass.
         let mut abs = vec![0.0; vertices.len()];
@@ -451,7 +471,7 @@ impl<T: Real, J: PrimInt> Canonical<'_, T, J> {
     }
 }
 
-impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J> {
+impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Counted<'_, T, J> {
     type Block = Entries<T, I>;
 
     fn rotation(&self, _: &[I]) -> usize {
@@ -459,17 +479,22 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J
     }
 
     fn whole(self, vertices: &[I]) -> Self::Block {
-        self.rows(vertices, I::from_index)
+        self.csr.rows(vertices, self.above, I::from_index)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
-        self.rows(vertices, |j| position[j])
+        let entries = vertices
+            .iter()
+            .map(|v| self.csr.above(v.index()).len())
+            .sum();
+        self.csr.rows(vertices, entries, |j| position[j])
     }
 }
 
-impl<T: Real, J: PrimInt> LonePivot<T> for Canonical<'_, T, J> {
+impl<T: Real, J: PrimInt> LonePivot<T> for Counted<'_, T, J> {
     fn lone(&self, v: usize) -> T {
-        self.row(v)
+        self.csr
+            .row(v)
             .find(|&(j, _)| j == v)
             .map_or(T::zero(), |(_, a)| a)
     }
@@ -485,8 +510,9 @@ mod tests {
     fn a_component_of_one_over_epsilon_vertices_is_too_large_at_its_lowest_vertex() {
         let n = (1u32 << 23) + 1;
         let csr = CsrRef::new(1, &[0u32, 1], &[0], &[1.0f32]).expect("a valid input");
+        let Partitioned { a, .. } = of_csr::<f32, u32, u32>(Canonical::of(csr.0));
         let partitioned = Partitioned {
-            a: Canonical::of(csr.0),
+            a,
             partition: Partition {
                 order: (0..n).collect(),
                 ends: vec![1, n],

@@ -8,7 +8,8 @@ use num_traits::PrimInt;
 use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock};
 use super::congruence::Congruence;
 use super::decomposition::{
-    of_csr, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle, SymmetricBlock,
+    of_csr, AdjacencyLayout, Biadjacency, Counted, Partitioned, RowSums, StrictUpperTriangle,
+    SymmetricBlock,
 };
 use super::forest::{Forest, Potential};
 use super::scaling::{self, ScaleVector, ScalingPolicy};
@@ -76,7 +77,7 @@ impl<T: Real, I: Index> ReducedComplement<T, I> {
     }
 }
 
-impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
+impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Counted<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
     fn reduce(self, policy: &ScalingPolicy, threads: Threads) -> Result<Reduced<T, I>, BuildError> {
         self.reduced(threads, |vertices, entries, threads| {
