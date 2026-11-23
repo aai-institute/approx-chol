@@ -190,9 +190,9 @@ trait Surplus<T: Real, I: Index> {
     }
     /// `M`'s grounds once it does not float.
     fn grounds(&self, folded: &Folded<'_, T, I>) -> Grounding<T>;
-    /// The worst clamped deficit `M`'s clamp reports; all of it by default.
-    fn reported(&self, folded: &Folded<'_, T, I>) -> f64 {
-        folded.clamped
+    /// Each row's deficit shift from `u`'s own rounding where a replay tracks it; none, so the flat clamp stands, by default.
+    fn shifts(&self, _: &Folded<'_, T, I>) -> Option<Vec<f64>> {
+        None
     }
 }
 
@@ -234,29 +234,37 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         (self.vector).past_band(widen(T::epsilon()), excess, diagonal, degrees)
     }
 
-    /// The worst clamped deficit past what `u`'s own rounding explains, `u = u*(1 + ρ)` with `ρ` by vertex: exact `u` balances each row, and `ρ` shifts row `i`'s `(Σ_j|m_ij| − m_ii)/m_ii` by `Σ_j w_j (ρ_j − ρ_i)`, `w_j = |m_ij|/m_ii`, to first order. Only a positive shift is taken out, so a row is reported only if past its band both with and without it; a negative shift leaves the row on its flat deficit, and an unknown one leaves it as it was.
-    fn beyond_null_rounding<'r>(&self, rho: impl FnOnce() -> &'r [f64]) -> f64 {
-        // `u`'s `f64` rounding, ~1e-14 on a 10⁵ ring, moves no row past a wider `ε`'s band.
+    /// What `u = u*(1 + ρ)`, `ρ` by vertex, shifts row `i`'s `Σ_j|m_ij| − m_ii` by: exact `u` balances each row, and `ρ` shifts it by `Σ_j |m_ij| (ρ_j − ρ_i)` to first order, `NaN` where `ρ` is unknown. Replayed only for a null-scaled `f64` row past its band: `u`'s `f64` rounding, ~1e-14 on a 10⁵ ring, moves no row past a wider `ε`'s band.
+    fn null_shifts<'r>(&self, rho: impl FnOnce() -> &'r [f64]) -> Option<Vec<f64>> {
         let wide = widen(T::epsilon()) != f64::EPSILON;
         if !matches!(self.vector, ScaleVector::NullVector) || self.clamped == 0.0 || wide {
-            return self.clamped;
+            return None;
         }
         let rho = rho();
         let rho: Vec<f64> = (self.m.vertices().iter()).map(|v| rho[v.index()]).collect();
-        let mut pulled = vec![0.0; rho.len()];
-        self.m.off_diagonal().abs_times(&rho, &mut pulled);
-        let RowSums { diagonal, abs } = &self.rows;
+        let mut shifts = vec![0.0; rho.len()];
+        self.m.off_diagonal().abs_times(&rho, &mut shifts);
+        for ((shift, &r), &s) in shifts.iter_mut().zip(&rho).zip(&self.rows.abs) {
+            *shift -= r * widen(s);
+        }
+        Some(shifts)
+    }
+
+    /// The worst clamped deficit past what `shifts` explains, all of it without them. Only a positive shift is taken out, so a row is reported only if past its band both with and without it; a negative shift leaves the row on its flat deficit, and an unknown one leaves it as it was.
+    fn reported(&self, shifts: Option<&[f64]>) -> f64 {
+        let Some(shifts) = shifts else {
+            return self.clamped;
+        };
         // Less only a positive shift; `max` also takes a `NaN` shift as `0`.
-        let shifted = (self.rows.deficits().zip(abs).zip(pulled.iter().zip(&rho)))
-            .map(|((e, &s), (&p, &r))| e - (p - r * widen(s)).max(0.0));
-        let flat = (self.rows.deficits().zip(diagonal)).map(|(e, &d)| e / widen(d));
+        let shifted = (self.rows.deficits().zip(shifts)).map(|(e, &r)| e - r.max(0.0));
+        let flat = (self.rows.deficits().zip(&self.rows.diagonal)).map(|(e, &d)| e / widen(d));
         self.past_band(shifted).map_or(0.0, |past| {
             (past.zip(flat).filter(|&(past, _)| past > 0.0))
                 .fold(0.0, |worst, (_, flat)| worst.max(flat))
         })
     }
 
-    /// The one float-or-ground rule. A row's surplus is rounding within its band, [`ScaleVector::past_band`]: a residue `(M1)_i` at its `k_i` entries, less the block's clamp, rounding too; a stated ground at none, and only where its residue is positive. `M` floats in the singular band with no stated ground and no residue past its band, or on a certificate; grounded, it keeps the rows past their band, or every residue when none is, as a balanced block needs a ground.
+    /// The one float-or-ground rule. A row's surplus is rounding within its band, [`ScaleVector::past_band`]: a residue `(M1)_i` at its `k_i` entries, less the block's reported clamp, whose twin it may be, and its own tracked rounding; a stated ground at none, and only where its residue is positive. `M` floats in the singular band with no stated ground and no residue past its band, or on a certificate; grounded, it keeps the rows past their band, or every residue when none is, as a balanced block needs a ground.
     fn settle<S: Surplus<T, I>>(
         self,
         (ones, trace): (f64, f64),
@@ -269,13 +277,18 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let certified = || certifier.as_ref().is_some_and(|c| c(self.m.vertices()));
         // A scaled Gram floats on its certificate alone, before any residue is read.
         let certificate = in_band && !residues_float && certified();
+        // One replay owns the tracked rounding: the report and the grounds read it.
+        let shifts = surplus.shifts(&self);
+        let report = self.reported(shifts.as_deref());
         let grounds = match certificate {
             true => None,
-            false => self.ground_rows(surplus.residues(&self), stated.as_deref()),
+            false => {
+                let residues = surplus.residues(&self);
+                self.ground_rows(residues, stated.as_deref(), report, shifts.as_deref())
+            }
         };
         let vector = self.vector;
         if certificate || (in_band && residues_float && (grounds.is_none() || certified())) {
-            let report = surplus.reported(&self);
             return Ok((self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, report));
         }
         let grounding = surplus.grounds(&self);
@@ -290,13 +303,12 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let grounding = grounding
             .kept(grounds.as_deref())
             .map_err(|i| out_of_range(self.m.vertices(), i))?;
-        let report = surplus.reported(&self);
         Ok((self.m).block(Balance::Balanced, grounding, vector, report))
     }
 
     /// A frustrated `M`, definite without a ground, keeping none of its rounding.
     fn frustrated(self) -> Result<IrreducibleBlock<T, I>, BuildError> {
-        let grounds = self.ground_rows(RowSurplus.residues(&self), None);
+        let grounds = self.ground_rows(RowSurplus.residues(&self), None, self.clamped, None);
         let Self {
             m,
             rows,
@@ -322,27 +334,43 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         (ones, trace)
     }
 
-    /// The rows whose surplus is a ground, outweighing its coupling, past its band, or `stated` with a positive residue; `None` when every one is rounding.
+    /// The rows whose surplus is a ground, outweighing its coupling, past its band less the `clamp` beside it and the surplus a negative shift of `shifts` explains, or `stated` with a positive residue; `None` when every one is rounding.
     #[inline(always)]
     fn ground_rows(
         &self,
         surplus: impl Iterator<Item = f64> + Clone,
         stated: Option<&[bool]>,
+        clamp: f64,
+        shifts: Option<&[f64]>,
     ) -> Option<Box<[bool]>> {
         let RowSums { diagonal, abs } = &self.rows;
         let stated = |i: usize, s: f64| s > 0.0 && stated.is_some_and(|stated| stated[i]);
         let ground = (surplus.clone().zip(abs).enumerate())
             .map(|(i, (s, &abs))| s > widen(abs) || stated(i, s));
-        let excess = (surplus.zip(diagonal)).map(|(s, &d)| s - self.clamped * widen(d));
-        let past = self.past_band(excess);
-        match past {
+        let excess = (surplus.zip(diagonal)).map(move |(s, &d)| s - clamp * widen(d));
+        match shifts {
+            None => self.rows_past(ground, excess),
+            // A residue is `−shift` to first order; `max` also takes a `NaN` shift as `0`.
+            Some(shifts) => {
+                let excess = (excess.zip(shifts)).map(|(e, &r)| e - (-r).max(0.0));
+                self.rows_past(ground, excess)
+            }
+        }
+    }
+
+    /// The rows where `ground` holds or `excess` is past its band.
+    #[inline(always)]
+    fn rows_past(
+        &self,
+        ground: impl Iterator<Item = bool> + Clone,
+        excess: impl Iterator<Item = f64> + Clone,
+    ) -> Option<Box<[bool]>> {
+        let n = self.rows.diagonal.len();
+        match self.past_band(excess) {
             // A floating block's rows: one scan, as the mask is built only once a row holds.
             None if !ground.clone().any(|g| g) => None,
-            None => rows_where(diagonal.len(), ground),
-            Some(past) => rows_where(
-                diagonal.len(),
-                ground.zip(past).map(|(g, ratio)| g || ratio > 0.0),
-            ),
+            None => rows_where(n, ground),
+            Some(past) => rows_where(n, ground.zip(past).map(|(g, ratio)| g || ratio > 0.0)),
         }
     }
 }

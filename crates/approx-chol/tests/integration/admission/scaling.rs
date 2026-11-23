@@ -9,6 +9,7 @@ use rstest::rstest;
 use crate::common::entry::only;
 use crate::common::gram::dense_csr;
 use crate::common::lcg::Lcg;
+use crate::common::solve::Solve;
 
 use super::{reduce, reduce_with};
 
@@ -263,6 +264,49 @@ fn a_null_vector_rounding_lost_below_range_keeps_its_report() {
         panic!("one clamp: {:?}", factor.clamps())
     };
     assert!(clamp.violation > miss / 4.0, "{clamp:?}");
+}
+
+/// The 3000-ring of seed 0, whose `u` rounding clamps rows `0` and `2999` by `~25ε` unreported (#210), bridged at its vertex 1500 to a triangle `t, t + 1, t + 2` with `u = 1`, a ground `c²` stated at `t + 1` and the closing column `(t + 2, t)` missing by `miss`: a ground `miss`, `~miss/2` of row `t + 2` and past its `21ε` band, twinned with a deficit `miss` at `t`. A heavy bridge keeps that deficit within `t`'s band, so the ground is kept; a light one reports it, and its twin goes with it (#513). `e_{t+1}`'s near-null response is `1/Σ_i g_i u_i²` over the kept grounds `g`.
+#[rstest]
+#[case::beside_rounding(30.0, true)]
+#[case::twin_of_a_reported_deficit(0.1, false)]
+fn a_ground_past_its_tracked_band_is_kept_beside_null_vector_rounding(
+    #[case] bridge: f64,
+    #[case] kept: bool,
+) {
+    let n = 3000;
+    let (t, m) = (n, n / 2);
+    let mut lcg = Lcg(0);
+    let mut u: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, 24)).collect();
+    u.extend([1.0; 3]);
+    let mut edges = ring(n);
+    edges.extend([(t, t + 1), (t + 1, t + 2), (t + 2, t), (m, t)]);
+    let mut a: Vec<u32> = edges.iter().map(|&(i, _)| i as u32).collect();
+    let mut b: Vec<u32> = edges.iter().map(|&(_, j)| j as u32).collect();
+    let mut x: Vec<f64> = edges.iter().map(|&(_, j)| u[j]).collect();
+    let mut y: Vec<f64> = edges.iter().map(|&(i, _)| -u[i]).collect();
+    // `33ε` of its row: past its band, within it less the ring's flat clamp.
+    let miss = 66.0 * f64::EPSILON;
+    x[n + 2] *= 1.0 + miss;
+    // `t`'s diagonal is `2 + bridge²`.
+    x[n + 3] *= bridge / u[m];
+    y[n + 3] *= bridge / u[m];
+    // `32ε` of its row, past the `19ε` band of no entry.
+    let stated = 64.0 * f64::EPSILON;
+    a.push(t as u32 + 1);
+    b.push(t as u32 + 2);
+    x.push(stated.sqrt());
+    y.push(0.0);
+    let gram = FactorWidth2::new(n + 3, (&a, &x), (&b, &y)).expect("valid columns");
+    let factor = factorize(gram).expect("admitted");
+    let clamps = factor.clamps();
+    assert_eq!(clamps.is_empty(), kept, "{clamps:?}");
+    let mut e = vec![0.0; n + 3];
+    e[t + 1] = 1.0;
+    let response = factor.solve(&e).expect("solves")[t + 1];
+    let grounds = if kept { stated + miss } else { stated };
+    let ratio = response * grounds;
+    assert!((ratio - 1.0).abs() < 0.05, "{ratio}");
 }
 
 #[test]

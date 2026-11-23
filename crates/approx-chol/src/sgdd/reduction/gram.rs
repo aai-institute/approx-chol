@@ -94,8 +94,8 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
         })
     }
 
-    fn reported(&self, folded: &Folded<'_, T, I>) -> f64 {
-        folded.beyond_null_rounding(|| &self.rho[..])
+    fn shifts(&self, folded: &Folded<'_, T, I>) -> Option<Vec<f64>> {
+        folded.null_shifts(|| &self.rho[..])
     }
 
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
