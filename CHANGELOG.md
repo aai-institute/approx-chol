@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- A singular block's solve projects `F·1` out by sums over fixed 32 768-row chunks, split across threads once a pass holds 2^19 values: a multi-column solve of a large block runs up to 1.85x faster on 8 threads. Solutions of blocks past 32 768 rows may differ from 0.8.1 in the last bits, once; they still match across thread counts and column by column.
+- A singular block's solve projects `F·1` out by sums over fixed 32 768-row chunks, split across threads once a pass holds 2^19 values: a multi-column solve of a large block runs up to 1.85x faster on 8 threads. Solutions of blocks past 32 768 rows may differ from before in the last bits; they still match across thread counts and column by column.
 
 ## [0.8.1] - 2026-11-11
 
