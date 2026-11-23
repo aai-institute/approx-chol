@@ -188,7 +188,7 @@ const SUM_CHUNK: usize = 1 << 15;
 const SPLIT_VALUES: usize = 1 << 19;
 
 /// `threads` for a pass over `values` past [`SPLIT_VALUES`], else the calling thread alone.
-fn split(values: usize, threads: Threads) -> Threads {
+fn pass_threads(values: usize, threads: Threads) -> Threads {
     match values >= SPLIT_VALUES {
         true => threads,
         false => threads::ONE,
@@ -229,7 +229,7 @@ fn chunked_sum<X: Copy + Sync, W: Batch<f64>>(
     }
     match x.len() <= SUM_CHUNK {
         true => compensated_sum(x, term),
-        false => tree(x, 0, &term, split(x.len() * W::LANES, threads)).total(),
+        false => tree(x, 0, &term, pass_threads(x.len() * W::LANES, threads)).total(),
     }
 }
 

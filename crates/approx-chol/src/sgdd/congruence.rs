@@ -2,7 +2,9 @@ use std::borrow::Cow;
 
 use rayon::prelude::*;
 
-use crate::{argmax, chunked_sum, compensated_sum, split, widen, Batch, Real, Threads, SUM_CHUNK};
+use crate::{
+    argmax, chunked_sum, compensated_sum, pass_threads, widen, Batch, Real, Threads, SUM_CHUNK,
+};
 
 /// `F` in `M = F A_c F`, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
 #[cfg_attr(
@@ -213,7 +215,7 @@ fn project_out<T: Real, V: Batch<T>>(
             *x = V::narrow(x.widen().sub(along.mul(widen(u(start + i)))));
         }
     };
-    match split(x.len() * V::LANES, threads).per_task(x.len(), SUM_CHUNK) {
+    match pass_threads(x.len() * V::LANES, threads).per_task(x.len(), SUM_CHUNK) {
         Some(per) => (x.par_chunks_mut(per).enumerate()).for_each(|(k, x)| subtract(k * per, x)),
         None => subtract(0, x),
     }
