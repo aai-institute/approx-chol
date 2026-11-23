@@ -1,4 +1,4 @@
-//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (GKS 2023, Algorithm 8, stars by Algorithm 6); a block above [`PHASED_FROM`] vertices may first pivot its local minima, in index order.
+//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (GKS 2023, Algorithm 8, stars by Algorithm 6); a block above [`PHASED_FROM`] vertices may first pivot its local minima, by row length.
 
 mod graph;
 mod ordering;
@@ -31,7 +31,7 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
         })
     }
 
-    /// Every vertex of `M`, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes. Above [`PHASED_FROM`] vertices, [`LocalMinima`] may pivot first in index order; the rest go in minimum-degree order.
+    /// Every vertex of `M`, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes. Above [`PHASED_FROM`] vertices, [`LocalMinima`] may pivot first, by row length; the rest go in minimum-degree order.
     pub(super) fn eliminate<S: Sign<T, I>>(
         &mut self,
         m: Sdd<T, I>,
@@ -172,7 +172,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         }
     }
 
-    /// Pivots `first`'s vertices, each star its row of `m`, their fill staged with `m`'s other edges and merged as it grows; loads the graph with the merged pairs.
+    /// Pivots `first`'s vertices by row length, then ground edge, then index, each star its row of `m`, their fill staged with `m`'s other edges and merged as it grows; loads the graph with the merged pairs.
     fn pivot_first<S: Sign<T, I>>(
         &mut self,
         (m, room): (Sdd<T, I>, Vec<u32>),
@@ -182,15 +182,24 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         slots: usize,
     ) -> ApproximateCholesky<T, I> {
         let (n, split) = (room.len(), self.copies);
-        let row = |v: usize| (room[v] as usize - 1) * usize::from(first.gone(v));
-        // Row `v` is written from `start[v + 1]`, which then ends it where `start[v]` begins it.
-        let mut start = vec![0usize; n + 1];
-        for v in 1..n {
-            start[v + 1] = start[v] + row(v - 1);
+        let row = |v: usize| room[v] as usize - 1;
+        // By row length and its ground edge, which the column drops, as minimum degree would take them: in index order the solve's column kinds alternate and mispredict, apply ×1.75–2.15 on panels.
+        let mut order: Vec<I> = (0..n)
+            .filter(|&v| first.gone(v))
+            .map(I::from_index)
+            .collect();
+        order.sort_by_key(|v| (row(v.index()), m.grounds(v.index())));
+        // Row `v` is written from `at[v]`, which then ends it; the rows lie in pivot order, each length's from its first pivot on.
+        let (mut at, mut entries, mut lengths) = (vec![0usize; n], 0, Vec::new());
+        for (p, v) in order.iter().map(|v| v.index()).enumerate() {
+            if lengths.last().is_none_or(|&(_, length)| length != row(v)) {
+                lengths.push((p, row(v)));
+            }
+            (at[v], entries) = (entries, entries + row(v));
         }
-        let entries = start[n] + row(n - 1);
-        let (mut to, mut weights) = (vec![I::from_index(0); entries], vec![T::zero(); entries]);
+        // Freed first, as `order` stands beside the rows in its place.
         drop(room);
+        let (mut to, mut weights) = (vec![I::from_index(0); entries], vec![T::zero(); entries]);
         let mut staged = Vec::new();
         m.grounded_edges(|k, j, w| {
             let (row, other) = match (first.gone(k.index()), first.gone(j.index())) {
@@ -198,11 +207,11 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
                 (_, true) => (j, k),
                 _ => return staged.push((k, j, split, w)),
             };
-            let at = &mut start[row.index() + 1];
+            let at = &mut at[row.index()];
             (to[*at], weights[*at]) = (other, w);
             *at += 1;
         });
-        drop(m);
+        drop((m, at));
         // The rows become the steps: each column is written over its own row, which it never outgrows.
         let mut steps = ApproximateCholesky {
             neighbors: to,
@@ -211,9 +220,14 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         };
         let (mut written, mut merged) = (0, staged.len());
         let Self { clique, fill, .. } = self;
-        for v in (0..n).filter(|&v| first.gone(v)) {
-            let row = (start[v]..start[v + 1])
-                .map(|k| (steps.neighbors[k], split, steps.coefficients[k]));
+        let (mut begin, mut run) = (0, 0);
+        for (p, v) in order.iter().map(|v| v.index()).enumerate() {
+            if lengths.get(run + 1).is_some_and(|&(first, _)| first == p) {
+                run += 1;
+            }
+            let end = begin + lengths[run].1;
+            let row = (begin..end).map(|k| (steps.neighbors[k], split, steps.coefficients[k]));
+            begin = end;
             fill.clear();
             let d = clique.pivot(draws, row, fill, sign);
             steps.write(v, (d, clique.shares(d)), slots, |steps, neighbor, share| {
@@ -221,7 +235,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
                 written += 1;
             });
             // Later minima still read the rows past it: `refill` never returns more entries than the row it reads.
-            debug_assert!(written <= start[v + 1], "column {v} outgrows its row");
+            debug_assert!(written <= end, "column {v} outgrows its row");
             staged.extend_from_slice(fill);
             // So past 2^16 pairs the staging stays within twice its merged size.
             if staged.len() >= (2 * merged).max(1 << 16) {
@@ -231,7 +245,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         }
         steps.neighbors.truncate(written);
         steps.coefficients.truncate(written);
-        drop(start);
+        drop((order, lengths));
         merge_pairs(&mut staged, first, split, sign);
         for pair in &mut staged {
             (pair.0, pair.1) = (
@@ -699,7 +713,7 @@ mod tests {
         }
     }
 
-    /// A phased block's steps and pin, hashed bit for bit.
+    /// A phased block's steps and pin, hashed bit for bit; its steps start with every local minimum once, by row length, then ground edge, then index.
     fn phased_bits<C: Copies>(
         m: Sdd<f64, u32>,
         copies: Option<Multi>,
@@ -707,10 +721,9 @@ mod tests {
     ) -> u64 {
         let room = EliminationGraph::<f64, u32, C>::room(&m);
         let never = m.ground().or(m.gauge(tail));
-        assert!(
-            LocalMinima::of(&m, &room, never).is_some(),
-            "the phase fires"
-        );
+        let first = LocalMinima::of(&m, &room, never).expect("the phase fires");
+        let gone = (0..m.n()).filter(|&v| first.gone(v)).count();
+        let grounds: Vec<bool> = (0..m.n()).map(|v| m.grounds(v)).collect();
         let (mut elimination, draws) = (
             CliqueTreeElimination::new(copies),
             Xoshiro256PlusPlus::seed_from_u64(7),
@@ -720,6 +733,11 @@ mod tests {
             Layout::Signed => elimination.eliminate(m, Signed { ground }, draws, tail),
             _ => elimination.eliminate(m, Unsigned, draws, tail),
         };
+        let keys: Vec<_> = (steps.headers[..gone].iter())
+            .map(|h| h.vertex.index())
+            .map(|v| (room[v], grounds[v], v))
+            .collect();
+        assert!(keys.iter().all(|&(_, _, v)| first.gone(v)) && keys.is_sorted_by(|a, b| a < b));
         let headers = (steps.headers.iter()).flat_map(|h| {
             [
                 u64::from(h.vertex),
@@ -735,7 +753,7 @@ mod tests {
         })
     }
 
-    /// A block whose local minima pivot first keeps every bit of its factor, AC and AC2, floating, grounded, signed, and gauged where `F` spans wide, as built before the phase's rows became its columns in place and the graph past it numbered only the vertices left (a8ec5cbb).
+    /// A block whose local minima pivot first keeps every bit of its factor, AC and AC2, floating, grounded, signed, and gauged where `F` spans wide, as built once its pivots went by row length and ground edge; the in-place columns and the renumbering past the phase (#523) had kept a8ec5cbb's bits.
     #[test]
     fn a_phased_block_factors_as_it_did() {
         let mut have = Vec::new();
@@ -757,18 +775,18 @@ mod tests {
             }
         }
         let want: [u64; 12] = [
-            0x387e_0f96_6cf8_4f25,
-            0x8f70_43e5_a5cc_f19b,
-            0x4a17_5e81_b969_5a12,
-            0x5660_9c9d_92c3_16c1,
-            0x6bb1_77de_9f92_2205,
-            0x6852_3368_cb7a_4b97,
-            0x77e5_2100_21e6_803e,
-            0xd155_9957_b8ac_2617,
-            0x7364_72c2_674b_0d16,
-            0x9b45_9ca5_b2ff_7444,
-            0xc2f2_8d3b_a85f_3dc2,
-            0x47e1_d284_6dfc_aa02,
+            0x3691_3b52_c94f_4894,
+            0x25b3_70e8_b06d_220f,
+            0x9fa5_68cd_0b59_d3ba,
+            0xabe2_66d7_00e4_fe92,
+            0x246d_7603_84d6_a676,
+            0xa59e_c29b_90d2_3f8c,
+            0x6d86_e4e5_9180_f7f2,
+            0x9e67_219a_a212_0150,
+            0x3859_6100_0367_f652,
+            0xb547_b35c_c76a_15c7,
+            0x6f79_14de_9898_4e71,
+            0x738f_90d7_2412_8fba,
         ];
         assert_eq!(have, want, "{have:#x?}");
     }
