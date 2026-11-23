@@ -81,6 +81,8 @@ impl Accumulator {
         // `?` per arm: returning the arms' results directly reshuffled the whole build's inlining.
         let a = match self {
             Self::Table => dense_cross(v, n_left, seen, pair)?,
+            // Panels come sorted by their left side; reading them in place skips the buckets (−11–33% on within's 1M AKMs).
+            Self::Buckets if v.left_ends_ascend() => left_ascending(v, n_left, seen, pair)?,
             Self::Buckets => {
                 let counts = counts::<T, J, I>(v, n_left, seen);
                 sum_cells::<T, J, I>(v, &counts, n_left, pair)?
@@ -217,6 +219,111 @@ fn sum_cells<T: Real, J: PrimInt, I: Index>(
     Ok(Rows::new(ptrs, columns, values, n_cols))
 }
 
+/// `C`'s rows read in place, `V`'s left ends ascending: each row's columns are a run, summed in column order as the buckets would hold them.
+fn left_ascending<T: Real, J: PrimInt, I: Index>(
+    v: FactorWidth2<'_, T, J>,
+    n_left: usize,
+    mut seen: impl FnMut(&Column<T, I>),
+    mut pair: impl FnMut(usize, usize, f64),
+) -> Result<Rows<T, I>, BuildError> {
+    let n_cols = v.n() - n_left;
+    let mut row = RowSums::new(n_cols);
+    let mut ptrs = Vec::with_capacity(n_left + 1);
+    ptrs.push(0);
+    let (mut columns, mut values) = (
+        Vec::with_capacity(v.n_columns()),
+        Vec::with_capacity(v.n_columns()),
+    );
+    let mut failed = None;
+    let mut close = |row: &mut RowSums<I>, ptrs: &mut Vec<usize>| {
+        let i = ptrs.len() - 1;
+        let closed = row.drain(|j, cell| {
+            pair(i, n_left + j.index(), cell);
+            columns.push(j);
+            values.push(admit::<T>(i, cell)?);
+            Ok(())
+        });
+        failed = failed.or(closed.err());
+        ptrs.push(columns.len());
+    };
+    v.for_each_column::<I>(
+        #[inline(always)]
+        |column| {
+            seen(&column);
+            while ptrs.len() <= column.a.index() {
+                close(&mut row, &mut ptrs);
+            }
+            row.add(column.b - I::from_index(n_left), column.cell());
+        },
+    );
+    while ptrs.len() <= n_left {
+        close(&mut row, &mut ptrs);
+    }
+    if let Some(error) = failed {
+        return Err(error);
+    }
+    drop(row);
+    columns.shrink_to_fit();
+    values.shrink_to_fit();
+    Ok(Rows::new(ptrs, columns, values, n_cols))
+}
+
+/// One row's cells summed in column order, each column's first cell marking it touched.
+struct RowSums<I> {
+    /// One slot past the columns, where the empty run stores its zero.
+    sums: Vec<f64>,
+    touched: Vec<I>,
+    /// The column of the current run of cells and its sum so far, held out of `sums`.
+    run: usize,
+    sum: f64,
+}
+
+impl<I: Index> RowSums<I> {
+    fn new(n_cols: usize) -> Self {
+        Self {
+            sums: vec![0.0; n_cols + 1],
+            touched: Vec::new(),
+            run: n_cols,
+            sum: 0.0,
+        }
+    }
+
+    #[inline(always)]
+    fn add(&mut self, j: I, cell: f64) {
+        // A run sums in a register: through `sums`, each cell waited on the last one's store.
+        if j.index() != self.run {
+            self.sums[self.run] = self.sum;
+            self.run = j.index();
+            self.sum = self.sums[self.run];
+        }
+        // A cell cancelling to zero mid-row is pushed again; the dedup absorbs it.
+        if self.sum == 0.0 {
+            self.touched.push(j);
+        }
+        self.sum += cell;
+    }
+
+    /// Each nonzero sum by ascending column to `emit`, the row left empty.
+    #[inline(always)]
+    fn drain(
+        &mut self,
+        mut emit: impl FnMut(I, f64) -> Result<(), BuildError>,
+    ) -> Result<(), BuildError> {
+        self.sums[self.run] = self.sum;
+        (self.run, self.sum) = (self.sums.len() - 1, 0.0);
+        self.touched.sort_unstable();
+        self.touched.dedup();
+        for &j in &self.touched {
+            let cell = std::mem::take(&mut self.sums[j.index()]);
+            if cell != 0.0 {
+                emit(j, cell)?;
+            }
+        }
+        self.touched.clear();
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +409,37 @@ mod tests {
                 sum(Accumulator::Buckets, gram)
             );
         }
+    }
+
+    /// Ascending lower ends, a row cancelling to zero and rows with no cell: read in place, the rows, `seen` and `pair` match the buckets'.
+    #[test]
+    fn ascending_rows_read_in_place_sum_as_the_buckets() {
+        let left = [0, 0, 0, 2, 2, 2, 5, 5, 6, 6, 9];
+        let right = [3, 1, 3, 0, 0, 2, 4, 1, 4, 4, 0];
+        let x = [1.0, 2.0, -1.0, 1.0, 0.5, 1.25, 2.0, 2.0, 1.0, 3.0, 1.0];
+        let y = [1.0, 0.25, 1.0, 1.5, -1.5, 1.0, 0.75, -0.75, -1.0, 1.0, -0.5];
+        let n_left = 12;
+        let gram = BipartiteFactorWidth2::new(
+            FactorWidth1::valued(n_left, &left, &x).unwrap(),
+            FactorWidth1::valued(5, &right, &y).unwrap(),
+        )
+        .unwrap()
+        .lower();
+        assert!(gram.left_ends_ascend());
+        let sum = |ascending: bool| {
+            let (mut seen, mut pairs) = (Vec::new(), Vec::new());
+            let seen_by = |column: &Column<f64, u32>| seen.push((column.a, column.cell()));
+            let pair_by = |i, j, cell| pairs.push((i, j, cell));
+            let rows = match ascending {
+                true => left_ascending::<f64, u32, u32>(gram, n_left, seen_by, pair_by),
+                false => {
+                    let counts = counts::<f64, u32, u32>(gram, n_left, seen_by);
+                    sum_cells::<f64, u32, u32>(gram, &counts, n_left, pair_by)
+                }
+            };
+            (format!("{:?}", rows.unwrap()), seen, pairs)
+        };
+        assert_eq!(sum(true), sum(false));
     }
 
     /// Eleven cells: pushes doubling past them leave slack the factor would keep.
