@@ -49,11 +49,8 @@ pub(super) fn of_csr<T: Real, J: PrimInt, I: Index>(
             }
         }
     }
-    let partition = sets.into_partition();
-    Partitioned {
-        a: Counted { csr, above },
-        partition,
-    }
+    let (a, partition) = (Counted { csr, above }, sets.into_partition());
+    Partitioned { a, partition }
 }
 
 /// The pivot of a vertex no entry couples: its diagonal, or its surplus where no diagonal is stored.
@@ -484,11 +481,9 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Counted<'_, T, J> 
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
-        let entries = vertices
-            .iter()
-            .map(|v| self.csr.above(v.index()).len())
-            .sum();
-        self.csr.rows(vertices, entries, |j| position[j])
+        let csr = &self.csr;
+        let entries = vertices.iter().map(|v| csr.above(v.index()).len()).sum();
+        csr.rows(vertices, entries, |j| position[j])
     }
 }
 
