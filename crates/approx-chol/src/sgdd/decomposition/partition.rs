@@ -43,10 +43,9 @@ impl<I: Index> Partition<I> {
         if n_left > 0 && links == 0 && (0..n_left).all(|i| c.row_len(i) > 0) {
             return Self::whole(n_left + n_right);
         }
-        // A row's set is its first column's; a column no row reaches is empty and alone.
-        let row = |columns: &mut Forest<I, ()>, i| c.row(i).next().map(|(j, _)| columns.find(j).0);
+        // A row's set is its first column's; an empty row, or a column no row reaches, stands alone.
         Self::of_sets(n_left + n_right, n_right, |v| match v < n_left {
-            true => row(&mut columns, v),
+            true => c.row(v).next().map(|(j, _)| columns.find(j).0),
             false => Some(columns.find(v - n_left).0),
         })
     }
