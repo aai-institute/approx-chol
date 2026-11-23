@@ -14,14 +14,13 @@ struct Bracket {
 }
 
 impl Bracket {
-    /// Of a positive `y`, row `i`'s `(Ny)_i` rounded by at most `rows[i]` relative, its floor `floor` or above, raised by the Rayleigh quotient where `rayleigh` asks for it; `Err` at the first row whose `y` is not positive or whose ratio is not finite.
+    /// Of a positive `y`, row `i`'s `(Ny)_i` rounded by at most `rows[i]` relative, its floor `floor` or above, raised by the Rayleigh quotient where that still decides settling, [`open`](Self::open); `Err` at the first row whose `y` is not positive or whose ratio is not finite.
     fn of<T: Real, I: Index>(
         n: &Normalized<'_, T, I>,
         y: &[f64],
         work: &mut [f64],
         rows: &[f64],
-        floor: f64,
-        rayleigh: impl FnOnce(&Self) -> bool,
+        (tolerance, band, floor): (f64, f64, f64),
     ) -> Result<Self, usize> {
         if let Some(i) = y.iter().position(|&v| !(v.is_finite() && v > 0.0)) {
             return Err(i);
@@ -50,7 +49,7 @@ impl Bracket {
             eigen_residual: residual / peak,
             floor: least.max(floor),
         };
-        if rayleigh(&bracket) {
+        if bracket.open(tolerance, band) {
             // `yᵀy`, `yᵀ(Ny − y)`, `Σ y_i |(Ny − y)_i|` and `yᵀNy` from the product already formed.
             let (mut norm, mut excess, mut spread, mut product) = (0.0, 0.0, 0.0, 0.0);
             for (((&o, &y), &s), &row) in ratios().zip(rows) {
@@ -89,9 +88,8 @@ impl Bracket {
     /// `ρ < 1` proven, or `y` a Perron vector of `ρ = 1` to rounding, which a floor past `1 + band` rules out: no later `y` moves the float decision.
     fn settled(&self, tolerance: f64, band: f64) -> bool {
         // Not the width, which never closes once `y` has components below `ε` (Li & Li, arXiv:2111.12642 §3).
-        let near_one = self.floor <= 1.0 + band;
-        self.certifies(tolerance)
-            && (self.high < 1.0 - band || near_one && self.eigen_residual <= band)
+        self.certifies(tolerance) && self.high < 1.0 - band
+            || self.open(tolerance, band) && self.eigen_residual <= band
     }
 
     /// Certified with `ρ ≤ 1 + band` still open: only then can `y` settle as a Perron vector of `ρ = 1`, or its Rayleigh quotient decide that.
@@ -153,8 +151,8 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     ) -> Result<Self, usize> {
         let mut work = vec![0.0; n.n()];
         let unit = vec![1.0; n.n()];
-        let open = |b: &Bracket| b.open(tolerance, band);
-        let bracket = Bracket::of(n, &unit, &mut work, &rows, f64::NEG_INFINITY, open)?;
+        let open = (tolerance, band, f64::NEG_INFINITY);
+        let bracket = Bracket::of(n, &unit, &mut work, &rows, open)?;
         Ok(Self {
             n,
             tolerance,
@@ -175,7 +173,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     pub(super) fn run(mut self) -> (Vec<f64>, ScaleVector) {
         let (tolerance, band, ceiling) = (self.tolerance, self.band, self.ceiling);
         let polished = |b: &Bracket| b.settled(tolerance, band) || b.refutes(ceiling);
-        // Within `64×` the band of `ρ = 1`, main's polish is measured to settle (`nearly_settled`); a block proven past `1 + band` keeps approaching, so its clamp falls to `ρ − 1`.
+        // Hands over once the top, which bounds `ρ`, is within `64×` the band of `1` while `ρ ≤ 1 + band` is open: the polish's shift `max(1, high) + 1000ε` then sits that close to `ρ`, where main's polish is measured to settle. The approach's own measure, not `nearly_settled`'s eigen-residual; a block proven past `1 + band` keeps approaching, so its clamp falls to `ρ − 1`.
         let near = |b: &Bracket| b.open(tolerance, band) && b.high - 1.0 <= 64.0 * band;
         let unit = vec![1.0; self.n.n()];
         self.solve(1.0 + 0.5 * tolerance, unit, |b| {
@@ -311,14 +309,14 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             // A refuting Rayleigh quotient is recorded and the step still taken, so the top keeps falling towards `ρ`.
             self.refuted |= rayleigh > self.ceiling;
         }
-        let y = system.solution(&cg.solution).into_owned();
+        let y = system.solution(&cg.solution);
         match self.bracket(&y) {
             Some(next) if next.high < top => {
-                self.best = (y, next);
+                self.best = (y.into_owned(), next);
                 true
             }
-            Some(_) => {
-                self.consider(&y, goal);
+            Some(next) => {
+                self.adopt(&y, next, goal);
                 false
             }
             None => false,
@@ -327,20 +325,19 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
 
     /// `y`'s bracket if positive, its floor and best's raised to the higher: what any `y` proved of `ρ` holds for every bracket, and spares the Rayleigh pass once it is past `1 + band`.
     fn bracket(&mut self, y: &[f64]) -> Option<Bracket> {
-        let (tolerance, band) = (self.tolerance, self.band);
-        // The Rayleigh quotient decides settling only for a certified `y` whose floor leaves `ρ ≤ 1 + band` open.
-        let rayleigh = |b: &Bracket| b.open(tolerance, band);
-        let floor = self.best.1.floor;
-        let bracket = Bracket::of(self.n, y, &mut self.work, &self.rows, floor, rayleigh).ok()?;
+        let open = (self.tolerance, self.band, self.best.1.floor);
+        let bracket = Bracket::of(self.n, y, &mut self.work, &self.rows, open).ok()?;
         self.best.1.floor = bracket.floor;
         Some(bracket)
     }
 
-    /// Adopts a positive `y` whose bracket ranks above the best's: meeting `goal` first, then certified by the smaller eigen-residual, else by the smaller violation.
+    /// [`adopt`](Self::adopt)s a positive `y` by its [`bracket`](Self::bracket).
     fn consider(&mut self, y: &[f64], goal: &impl Fn(&Bracket) -> bool) -> bool {
-        let Some(bracket) = self.bracket(y) else {
-            return false;
-        };
+        (self.bracket(y)).is_some_and(|bracket| self.adopt(y, bracket, goal))
+    }
+
+    /// Adopts `y` whose `bracket` ranks above the best's: meeting `goal` first, then certified by the smaller eigen-residual, else by the smaller violation.
+    fn adopt(&mut self, y: &[f64], bracket: Bracket, goal: &impl Fn(&Bracket) -> bool) -> bool {
         let tolerance = self.tolerance;
         // Certified, only the eigen-residual moves towards settling; a smaller violation alone resumes a restart from a stale best.
         let rank = |b: &Bracket| {
@@ -451,8 +448,8 @@ mod tests {
     ) -> Bracket {
         let normalized = Normalized::new(off_diagonal, degree, crate::threads::ONE);
         let mut work = vec![0.0; y.len()];
-        let open = |b: &Bracket| b.open(tolerance, band);
-        Bracket::of(&normalized, y, &mut work, rows, f64::NEG_INFINITY, open).expect("positive")
+        let open = (tolerance, band, f64::NEG_INFINITY);
+        Bracket::of(&normalized, y, &mut work, rows, open).expect("positive")
     }
 
     /// A `50 × 50` grid and a hub joined to 2400 of its vertices, off-diagonals raised by `1 + η` over a diagonal of unraised degrees: `y = √degree` is `N`'s Perron vector, `ρ = 1 + η`, and `η = 1.5×` the hub's band. Charged the hub's `(k + 3)ε` on every row, the Rayleigh floor stayed under `1 + band`, so the endgame ran to the budget.

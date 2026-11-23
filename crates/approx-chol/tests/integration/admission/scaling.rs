@@ -24,7 +24,7 @@ fn dld(
     let d: Vec<f64> = (0..n)
         .map(|i| 1.0 + spread * (((7919 * i + 104_729 * seed) % 1000) as f64 / 1000.0 - 0.5))
         .collect();
-    congruent_laplacian(&d, edges, &vec![1.0; edges.len()])
+    congruent_laplacian(&d, edges, &vec![1.0; edges.len()], 0.0)
 }
 
 /// `D L_w D` with `D` and the weights log-uniform over `[2^-bits, 1)`.
@@ -37,7 +37,7 @@ fn weighted_dld(
     let mut lcg = Lcg(seed.wrapping_mul(2_654_435_761).wrapping_add(17));
     let d: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, bits)).collect();
     let weights: Vec<f64> = edges.iter().map(|_| log_uniform(&mut lcg, bits)).collect();
-    congruent_laplacian(&d, edges, &weights)
+    congruent_laplacian(&d, edges, &weights, 0.0)
 }
 
 /// Log-uniform over `[2^-bits, 1)`; powers of two come from their bits, so no libm.
@@ -46,17 +46,19 @@ fn log_uniform(lcg: &mut Lcg, bits: u32) -> f64 {
     (1.0 + lcg.unit()) * f64::from_bits((1023 - exponent) << 52)
 }
 
-/// `D L_w D`: off-diagonal `−w_ij d_i d_j`, diagonal `d_i (Σ_j w_ij) d_i`.
+/// `D L_w D` with its off-diagonals raised by `1 + η`: off-diagonal `−w_ij (1 + η) d_i d_j`, diagonal `d_i (Σ_j w_ij) d_i`.
 fn congruent_laplacian(
     d: &[f64],
     edges: &[(usize, usize)],
     weights: &[f64],
+    eta: f64,
 ) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); d.len()];
     let mut degrees = vec![0.0; d.len()];
     for (&(i, j), &w) in edges.iter().zip(weights) {
-        rows[i].push((j, -(w * d[i] * d[j])));
-        rows[j].push((i, -(w * d[j] * d[i])));
+        let x = -w * (1.0 + eta);
+        rows[i].push((j, x * d[i] * d[j]));
+        rows[j].push((i, x * d[j] * d[i]));
         degrees[i] += w;
         degrees[j] += w;
     }
@@ -135,36 +137,13 @@ fn rounded_triangle() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
 /// `k × k` grid, each vertex's right then down edge, `D` and weights log-uniform over `[2^-bits, 1)`, off-diagonals raised by `1 + η`: `D L_w D` with `ρ(N) = 1 + η`.
 fn weighted_raised(k: usize, eta: f64, bits: u32, seed: u64) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     let n = k * k;
+    let right = |v: usize| (v % k + 1 < k).then_some((v, v + 1));
+    let down = |v: usize| (v + k < n).then_some((v, v + k));
+    let edges: Vec<_> = (0..n).flat_map(|v| [right(v), down(v)]).flatten().collect();
     let mut lcg = Lcg(seed.wrapping_mul(2_654_435_761).wrapping_add(17));
     let d: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, bits)).collect();
-    let right = |v: usize| (v % k + 1 < k).then_some(v + 1);
-    let down = |v: usize| (v + k < n).then_some(v + k);
-    let edges = (0..n).flat_map(|v| {
-        [right(v), down(v)]
-            .into_iter()
-            .flatten()
-            .map(move |w| (v, w))
-    });
-    let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-    let mut degrees = vec![0.0; n];
-    for (i, j) in edges {
-        let w = log_uniform(&mut lcg, bits);
-        rows[i].push((j, -w * (1.0 + eta)));
-        rows[j].push((i, -w * (1.0 + eta)));
-        degrees[i] += w;
-        degrees[j] += w;
-    }
-    let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
-    for (i, row) in rows.iter_mut().enumerate() {
-        row.push((i, degrees[i]));
-        row.sort_by_key(|&(j, _)| j);
-        for &(j, x) in row.iter() {
-            columns.push(j as u32);
-            values.push(x * d[i] * d[j]);
-        }
-        row_ptrs.push(columns.len() as u32);
-    }
-    (row_ptrs, columns, values)
+    let weights: Vec<f64> = edges.iter().map(|_| log_uniform(&mut lcg, bits)).collect();
+    congruent_laplacian(&d, &edges, &weights, eta)
 }
 
 /// Settled within 16ε, then `F·A·F` rounds a few ε more: this grid's 17.3ε is rounding, not a deficit. The singular wide-weight grid left Noda steps no budget to settle in until they handed over near it.
