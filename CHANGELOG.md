@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- A singular block's solve projects `F·1` out by sums over fixed 32 768-row chunks, split across threads once a pass holds 2^19 values: a multi-column solve of a large block runs up to 1.85x faster on 8 threads. Solutions of blocks past 32 768 rows may differ from before in the last bits; they still match across thread counts and column by column.
+
 ## [0.8.1] - 2026-11-11
 
 ### Changed

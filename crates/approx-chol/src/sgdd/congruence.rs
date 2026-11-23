@@ -1,6 +1,10 @@
 use std::borrow::Cow;
 
-use crate::{argmax, compensated_sum, widen, Batch, Real};
+use rayon::prelude::*;
+
+use crate::{
+    argmax, chunked_sum, compensated_sum, pass_threads, widen, Batch, Real, Threads, SUM_CHUNK,
+};
 
 /// `F` in `M = F A_c F`, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
 #[cfg_attr(
@@ -84,18 +88,18 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ScaledF
 
 impl<T: Real> Congruence<T> {
     /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
-    pub(crate) fn restrict<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
+    pub(crate) fn restrict<V: Batch<T>>(&self, x: &mut [V], singular: bool, threads: Threads) {
         if singular {
-            self.project_out_null(x);
+            self.project_out_null(x, threads);
         }
         self.apply(x);
     }
 
     /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
-    pub(crate) fn prolongate<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
+    pub(crate) fn prolongate<V: Batch<T>>(&self, x: &mut [V], singular: bool, threads: Threads) {
         self.apply(x);
         if singular {
-            self.project_out_null(x);
+            self.project_out_null(x, threads);
         }
     }
 
@@ -174,29 +178,45 @@ impl<T: Real> Congruence<T> {
     }
 
     /// Removes the component along `F·1`, max-normalized: the raw norm overflows at a 1e200 scale range.
-    fn project_out_null<V: Batch<T>>(&self, x: &mut [V]) {
+    fn project_out_null<V: Batch<T>>(&self, x: &mut [V], threads: Threads) {
         // Every unit `F·1` is its own normalization, with `uᵀu = n` exact below 2⁵³.
         let n = x.len() as f64;
         match self {
-            Self::Identity => project_out(x, |_| T::one(), n),
+            Self::Identity => project_out(x, |_| T::one(), n, threads),
             Self::NegateFrom(first) => {
                 let first = *first;
-                project_out(x, |i| if i >= first { -T::one() } else { T::one() }, n)
+                project_out(
+                    x,
+                    |i| if i >= first { -T::one() } else { T::one() },
+                    n,
+                    threads,
+                )
             }
-            Self::Signs(factors) => project_out(x, |i| factors[i], n),
+            Self::Signs(factors) => project_out(x, |i| factors[i], n, threads),
             Self::Scaled(scales) => {
                 let largest = scales.factors[scales.peak].abs();
-                project_out(x, |i| scales.factors[i] / largest, scales.norm)
+                project_out(x, |i| scales.factors[i] / largest, scales.norm, threads)
             }
         }
     }
 }
 
-fn project_out<T: Real, V: Batch<T>>(x: &mut [V], u: impl Fn(usize) -> T, uu: f64) {
+fn project_out<T: Real, V: Batch<T>>(
+    x: &mut [V],
+    u: impl Fn(usize) -> T + Sync,
+    uu: f64,
+    threads: Threads,
+) {
     // Compensated, or a constant added to a floating `b` moves the solution (#147).
-    let ux = compensated_sum(x, |i, x: V| x.widen().mul(widen(u(i))));
+    let ux = chunked_sum(x, |i, x: V| x.widen().mul(widen(u(i))), threads);
     let along = ux.div(uu);
-    for (i, x) in x.iter_mut().enumerate() {
-        *x = V::narrow(x.widen().sub(along.mul(widen(u(i)))));
+    let subtract = |start: usize, x: &mut [V]| {
+        for (i, x) in x.iter_mut().enumerate() {
+            *x = V::narrow(x.widen().sub(along.mul(widen(u(start + i)))));
+        }
+    };
+    match pass_threads(x.len() * V::LANES, threads).per_task(x.len(), SUM_CHUNK) {
+        Some(per) => (x.par_chunks_mut(per).enumerate()).for_each(|(k, x)| subtract(k * per, x)),
+        None => subtract(0, x),
     }
 }

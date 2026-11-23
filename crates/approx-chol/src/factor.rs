@@ -392,14 +392,14 @@ impl<T: Real, I: Index> Block<T, I> {
     #[inline(always)]
     fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], stack: &mut MemStack, threads: Threads) {
         let singular = self.cholesky.singular();
-        self.congruence.restrict(x, singular);
+        self.congruence.restrict(x, singular, threads);
         match &self.elimination {
             None => self.cholesky.solve(x, stack),
             Some(elimination) => elimination.solve(x, threads, stack, |kept, stack| {
                 self.cholesky.solve(kept, stack)
             }),
         }
-        self.congruence.prolongate(x, singular);
+        self.congruence.prolongate(x, singular, threads);
     }
 }
 
