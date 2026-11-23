@@ -214,10 +214,10 @@ fn chunked_sum<X: Copy + Sync, W: Batch<f64>>(
         let (left, right) = x.split_at(mid);
         let (left, right) = match threads.tasks() > 1 {
             true => {
-                let half = threads.within_task(2);
+                let (first, second) = threads.halves();
                 rayon::join(
-                    || tree(left, start, term, half),
-                    || tree(right, start + mid, term, half),
+                    || tree(left, start, term, first),
+                    || tree(right, start + mid, term, second),
                 )
             }
             false => (

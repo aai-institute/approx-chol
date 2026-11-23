@@ -45,6 +45,15 @@ impl Threads {
         }
     }
 
+    /// The budgets of a split's two tasks: a count's halves, the larger second, so an odd count keeps every thread.
+    pub(crate) fn halves(self) -> (Self, Self) {
+        let larger = match self {
+            Threads::All => Threads::All,
+            Threads::Count(n) => NonZeroUsize::new(n.get().div_ceil(2)).map_or(ONE, Threads::Count),
+        };
+        (self.within_task(2), larger)
+    }
+
     /// How a loop over `count` items splits, at least `grain` items a task.
     pub(crate) fn split(self, count: usize, grain: usize) -> Split {
         match self.per_task(count, grain) {
@@ -247,5 +256,7 @@ mod tests {
         assert_eq!(count(7).within_task(2), count(3));
         assert_eq!(count(3).within_task(3), ONE);
         assert_eq!(count(2).within_task(3), ONE);
+        assert_eq!(count(7).halves(), (count(3), count(4)));
+        assert_eq!(count(1).halves(), (ONE, ONE));
     }
 }
