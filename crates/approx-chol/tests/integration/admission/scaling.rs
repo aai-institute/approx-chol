@@ -503,6 +503,40 @@ fn a_ground_is_kept_only_past_its_tracked_band(
     assert!((ratio - 1.0).abs() < 0.05, "{ratio}");
 }
 
+/// A ring of `n` with `u` log-uniform over `2^24` from `u_0 = 1`, edge `(0, 1)` weighed `2^40` and `(n − 2, n − 1)` `2^-40`, and a ground `40ε` of its row stated at `n/2`. No row past its band less the flat clamp, so no clamp, and before #524 no replay: a light row whose surplus is only `u`'s rounding, its twin deficit hidden behind the heavy edge, was kept as a second ground beside the stated one, and `e_s` responded by `0.74`, `0.003` and `2e-8` of `1/g_s`. 5 of 400 seeds hit at `n = 1000`, 22 at `3000`; none with the replay.
+#[rstest]
+#[case::slightly(126)]
+#[case::far(63)]
+#[case::farthest(114)]
+fn a_rounding_row_beside_a_stated_ground_is_not_kept(#[case] seed: u64) {
+    let n = 1000;
+    let mut lcg = Lcg(seed * 31 + n as u64);
+    let mut u: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, 24)).collect();
+    u[0] = 1.0;
+    let edges = ring(n);
+    let mut a: Vec<u32> = edges.iter().map(|&(i, _)| i as u32).collect();
+    let mut b: Vec<u32> = edges.iter().map(|&(_, j)| j as u32).collect();
+    let mut x: Vec<f64> = edges.iter().map(|&(_, j)| u[j]).collect();
+    let mut y: Vec<f64> = edges.iter().map(|&(i, _)| -u[i]).collect();
+    for (k, scale) in [(0, 2f64.powi(20)), (n - 2, 2f64.powi(-20))] {
+        x[k] *= scale;
+        y[k] *= scale;
+    }
+    let s = n / 2;
+    let stated = 40.0 * f64::EPSILON * (u[s - 1] * u[s - 1] + u[s + 1] * u[s + 1]);
+    a.push(s as u32);
+    b.push(s as u32 + 1);
+    x.push(stated.sqrt());
+    y.push(0.0);
+    let gram = FactorWidth2::new(n, (&a, &x), (&b, &y)).expect("valid columns");
+    let factor = factorize(gram).expect("admitted");
+    assert!(factor.clamps().is_empty(), "{:?}", factor.clamps());
+    let mut e = vec![0.0; n];
+    e[s] = 1.0;
+    let ratio = factor.solve(&e).expect("solves")[s] * stated;
+    assert!((ratio - 1.0).abs() < 0.05, "{ratio}");
+}
+
 #[test]
 fn a_policy_reports_what_it_was_built_from() {
     let default = ScalingPolicy::default();

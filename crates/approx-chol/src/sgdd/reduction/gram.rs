@@ -95,7 +95,7 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
     }
 
     fn rounding(&self, folded: &Folded<'_, T, I>) -> Option<NullRounding> {
-        folded.null_rounding(|| &self.rho[..])
+        Some(folded.null_rounding(self.rho))
     }
 
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
