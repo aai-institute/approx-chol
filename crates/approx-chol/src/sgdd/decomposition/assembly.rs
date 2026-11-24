@@ -173,7 +173,7 @@ fn rounded<'a, T: Real, I: Index>(
         let diagonal = (vertices.iter().zip(surplus.clone())).map(|(v, s)| s + abs[v.index()]);
         let past = || {
             let (surplus, diagonal) = (surplus.clone(), diagonal.clone());
-            ScaleVector::Identity.past_band(epsilon, surplus, diagonal, (0, Vec::new))
+            ScaleVector::Identity.past_band(epsilon, surplus, diagonal, (0, |_| 0))
         };
         let floats = || {
             let ones = crate::Sum2::of(vertices, |_, v| epsilon * widen(s[v.index()])).total();

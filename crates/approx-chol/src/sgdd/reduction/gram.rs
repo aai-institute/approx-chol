@@ -46,6 +46,13 @@ impl<T: Real, I: Index> Reduced<T, I> {
                         .and_then(|u| scaling::null_scaling(u, &a.entries.rows.diagonal))
                         .map_or_else(relax, Ok)
                 })
+                .map(|mut block| {
+                    // Pending across the pass over `V`: its degrees are counted again in `settle`, not held.
+                    if let Settling::Pending(folded) = &mut block {
+                        folded.degrees.take();
+                    }
+                    block
+                })
             })?;
             // `u` freed before the column pass: only the certified set outlives the scaling.
             let read = nulls.into_inner().map(|(_, certified)| certified);
@@ -82,8 +89,7 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
         let stated = (folded.m.vertices().iter()).map(|v| self.stated[v.index()]);
         let diagonal = folded.rows.diagonal.iter().map(|&d| widen(d));
         // A stated ground sums without cancellation: the band of no entry.
-        let past =
-            (folded.vector).past_band(widen(T::epsilon()), stated, diagonal, (0, Vec::new))?;
+        let past = (folded.vector).past_band(widen(T::epsilon()), stated, diagonal, (0, |_| 0))?;
         rows_where(folded.rows.diagonal.len(), past.map(|ratio| ratio > 0.0))
     }
 
