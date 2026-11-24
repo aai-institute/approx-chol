@@ -12,7 +12,7 @@ use crate::factor::sign::Sign;
 use crate::factor::within_one;
 use crate::sgdd::FactorTail;
 use crate::{narrow, Batch, Index, Real};
-use graph::{EliminationGraph, FillSearch};
+use graph::{EliminationGraph, Landings};
 use ordering::MinDegreeOrder;
 
 /// A task's AC or AC2 elimination; small blocks reuse its buffers (malloc was 17% of 20-vertex covers).
@@ -154,6 +154,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             fill,
             order,
         } = self;
+        let mut landings = Landings::default();
         for remaining in (0..pivots).rev() {
             let v = order.next_vertex();
             fill.clear();
@@ -162,10 +163,11 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             let column = clique.eliminate(draws, row, fill, sign);
             steps.push(v, column, slots);
             graph.eliminate_vertex(v);
-            let mut search = FillSearch::new(entries, clique.neighbors().len(), remaining);
+            let mut search = landings.search(entries, clique.neighbors().len(), remaining);
             for &edge in fill.iter() {
                 graph.push_fill(edge, &mut search, *split, sign);
             }
+            landings.add(&search);
             order.update(graph, clique.neighbors());
             // Its own pass: chained onto the neighbors, it cost unsigned 16-vertex paths +5-8%.
             order.update(graph, clique.dropped());
@@ -753,7 +755,7 @@ mod tests {
         })
     }
 
-    /// A block whose local minima pivot first keeps every bit of its factor, AC and AC2, floating, grounded, signed, and gauged where `F` spans wide, as built once its pivots went by row length and ground edge; the in-place columns and the renumbering past the phase (#523) had kept a8ec5cbb's bits.
+    /// A block whose local minima pivot first keeps every bit of its factor, AC and AC2, floating, grounded, signed, and gauged where `F` spans wide, as built once its pivots searched their fill only while earlier fill landed on held pairs; pivoting by row length and ground edge (#527), the in-place columns and the renumbering past the phase (#523) had each moved or kept them before.
     #[test]
     fn a_phased_block_factors_as_it_did() {
         let mut have = Vec::new();
@@ -775,18 +777,18 @@ mod tests {
             }
         }
         let want: [u64; 12] = [
-            0x3691_3b52_c94f_4894,
-            0x25b3_70e8_b06d_220f,
-            0x9fa5_68cd_0b59_d3ba,
-            0xabe2_66d7_00e4_fe92,
-            0x246d_7603_84d6_a676,
-            0xa59e_c29b_90d2_3f8c,
-            0x6d86_e4e5_9180_f7f2,
-            0x9e67_219a_a212_0150,
-            0x3859_6100_0367_f652,
-            0xb547_b35c_c76a_15c7,
-            0x6f79_14de_9898_4e71,
-            0x738f_90d7_2412_8fba,
+            0x87ee_b007_ae97_2203,
+            0xd473_cf64_bed2_4824,
+            0x617c_967b_9336_4b04,
+            0xa0cc_16e1_50e1_4cff,
+            0xc6c6_37bf_a5b6_2941,
+            0x6fe7_0ebc_bc24_d5cf,
+            0x7f8b_fa99_d989_68ba,
+            0xd720_d1e6_a340_377d,
+            0x3dc5_7cc0_27df_0e75,
+            0x7a4c_ebf3_e16e_1382,
+            0x3826_c375_b00c_213b,
+            0xacb9_d73b_16af_dd48,
         ];
         assert_eq!(have, want, "{have:#x?}");
     }
