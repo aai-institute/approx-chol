@@ -610,3 +610,26 @@ fn a_person_firm_panel_pivots_its_people_first(#[case] panel: Panel, #[case] cop
         );
     }
 }
+
+/// A grid's fill lands on held pairs a fifth to a half of the time, so its pivots stop merging it into single-counted pairs: merging every pivot's took 227 iterations over these six seeds instead of 215.
+#[test]
+fn a_grid_preconditions_without_merging_its_fill() {
+    let n = 200 * 200;
+    let mut graph = grid::grid(200, 200);
+    graph.ground[0] = 1.0;
+    let b = graph.apply(&(0..n).map(|v| (v % 5) as f64 - 2.0).collect::<Vec<_>>());
+    let reduced = Entry::Csr.reduce(&graph, Types::F64U32);
+    let total: usize = (0..6)
+        .map(|seed| {
+            let config = Config {
+                seed,
+                exact_max_dim: 0,
+                ..Config::default()
+            };
+            let factor = reduced.factorize(&config);
+            pcg_iterations(|x| graph.apply(x), |r| factor.solve(r), &b, 1e-8, 100)
+                .unwrap_or_else(|| panic!("seed {seed} did not converge"))
+        })
+        .sum();
+    assert!(total <= 221, "{total} iterations over seeds 0-5");
+}

@@ -16,8 +16,9 @@ pub(super) struct FillSearch {
     /// Its searches so far that found the pair, and that did not.
     found: u32,
     missed: u32,
-    /// More pivots left than four times its neighbors; at most that, the remainder is nearly complete and every order of it fills alike (2-4 measured alike, 8 cost bands 0.5-1.5 PCG iterations).
-    order_matters: bool,
+    /// More pivots left than four times its neighbors, and earlier fill [landing](Landings) on held pairs.
+    /// At most that many left, the remainder is nearly complete and every order of it fills alike (2-4 measured alike, 8 cost bands 0.5-1.5 PCG iterations).
+    pivot_searches: bool,
 }
 
 impl FillSearch {
@@ -27,7 +28,7 @@ impl FillSearch {
             pivot_entries: entries,
             found: 0,
             missed: 0,
-            order_matters: remaining > 4 * neighbors,
+            pivot_searches: remaining > 4 * neighbors,
         }
     }
 
@@ -37,8 +38,8 @@ impl FillSearch {
         let competitive = shorter <= self.pivot_entries.saturating_mul(2);
         // Does this pivot's fill keep landing on held pairs? Allowing one miss, fixest took 40 PCG iterations instead of 17; 2-4 measured alike.
         let paying_off = self.missed < 3 + 2 * self.found;
-        // Does the order still matter? Not once the remainder is nearly complete.
-        competitive && paying_off && self.order_matters
+        // Does the order still matter, and does fill land on held pairs?
+        competitive && paying_off && self.pivot_searches
     }
 
     fn record(&mut self, found: bool) {
@@ -46,6 +47,39 @@ impl FillSearch {
             self.found += 1;
         } else {
             self.missed += 1;
+        }
+    }
+}
+
+/// Earlier pivots' searches that found their pair, and that did not: whether the next pivot searches at all.
+///
+/// Counting a duplicate once pays only where fill lands on held pairs nearly always (banded 100%, fixest 93-96%). Grids (22-49%) order better counting it in full: 1000² took 47 PCG iterations instead of 42. AKM-like fill (37-75%) scans lists of 100+ entries: its builds cost 20% more for no fewer iterations.
+#[derive(Default)]
+pub(super) struct Landings {
+    found: u64,
+    missed: u64,
+}
+
+impl Landings {
+    /// While three times its misses stay within its finds plus eight, about three in four found, the first two misses free; and every eighth pivot, so a closed record still gathers evidence.
+    /// Thresholds 1/2-4/5 and periods 4-16 measured alike; probing only each pivot's first push, the record closed on fixest, whose first pushes land half as often as the rest (5M 41 PCG iterations instead of 17).
+    fn open(&self, remaining: usize) -> bool {
+        3 * self.missed <= self.found + 8 || remaining % 8 == 0
+    }
+
+    /// The search for the fill of a pivot holding `entries`, `neighbors` distinct, with `remaining` pivots left after it.
+    pub(super) fn search(&self, entries: u32, neighbors: usize, remaining: usize) -> FillSearch {
+        let mut search = FillSearch::new(entries, neighbors, remaining);
+        search.pivot_searches &= self.open(remaining);
+        search
+    }
+
+    /// Adds a pivot's searches, halving the record past 256, so a block whose fill turns to landing reopens within a few hundred searches; never halving measured alike.
+    pub(super) fn add(&mut self, search: &FillSearch) {
+        self.found += u64::from(search.found);
+        self.missed += u64::from(search.missed);
+        if self.found + self.missed > 256 {
+            (self.found, self.missed) = (self.found / 2, self.missed / 2);
         }
     }
 }
@@ -240,7 +274,7 @@ mod tests {
     use proptest::collection::vec;
     use proptest::prelude::*;
 
-    use super::{EliminationGraph, FillSearch};
+    use super::{EliminationGraph, FillSearch, Landings};
     use crate::factor::cholesky::approximate::REUSED_UP_TO;
     use crate::factor::clique_tree::{Copies, Multi, Single};
     use crate::factor::sign::{Signed, Unsigned};
@@ -368,6 +402,23 @@ mod tests {
         }
         assert!(!search.worth(1));
         assert!(!FillSearch::new(4, 4, 16).worth(1) && FillSearch::new(4, 4, 17).worth(1));
+    }
+
+    /// The record stays open while three times its misses stay within its finds plus eight, a closed one searches every eighth pivot, and halving lets later finds reopen it.
+    #[test]
+    fn landings_close_below_three_in_four() {
+        let record = |found, missed| Landings { found, missed };
+        assert!(record(0, 2).open(1) && !record(0, 3).open(1));
+        assert!(record(4, 4).open(1) && !record(4, 5).open(1));
+        assert!(!record(0, 3).search(4, 4, 100).worth(1) && record(0, 3).search(4, 4, 96).worth(1));
+        // Closed by 200 misses, four sampled pivots landing 100 each reopen it; never halved, it stays closed at 400 to 200.
+        let mut landings = record(0, 200);
+        let mut landed = FillSearch::new(4, 4, 100);
+        (0..100).for_each(|_| landed.record(true));
+        for _ in 0..4 {
+            landings.add(&landed);
+        }
+        assert!(landings.open(1), "{:?}", (landings.found, landings.missed));
     }
 
     /// A searched pair merges and the degree counts it once; past the pivot's reach, a duplicate stands beside it and the degree counts both.
