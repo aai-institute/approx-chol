@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-24
+
+The elimination order changed on grids, AKM and random graphs, so factors differ from 0.8.2 there. API and persisted format are unchanged.
+
+### Changed
+
+- Grids are back to 0.8.1's PCG iterations (1000²: 47 → 42); AKM builds take 14% fewer instructions. ([#530])
+- Grounded Gram rings build ~3% faster. ([#532])
+
+### Fixed
+
+- A grounded factor-width-2 Gram block no longer keeps null-vector rounding as a ground. ([#524])
+
+### Known regressions
+
+Measured against 0.8.1:
+
+- AKM, random and 3-D grid builds take 9–17% more instructions, at equal or fewer PCG iterations. ([#528])
+- Fixed-effects panels take up to 1.7 more PCG iterations. ([#529])
+- Single-column CSR solves on fixed-effects panels take up to 1.13x wall. ([#502])
+- Scaling: some singular wide-weight grids ground instead of floating; near-band hub stars can end unproven. ([#341], [#522])
+
 ## [0.8.2] - 2026-11-24
 
 The elimination order changed, so factors and solutions differ from 0.8.1 on most inputs. API and persisted format are unchanged.
@@ -302,7 +324,8 @@ for graph Laplacians in Rust with Python bindings.
 - Multi-platform CI with coverage reporting
 - Dual MIT license for Rust crate and Python package
 
-[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/aai-institute/approx-chol/releases/tag/v0.8.3
 [0.8.2]: https://github.com/aai-institute/approx-chol/releases/tag/v0.8.2
 [0.8.1]: https://github.com/aai-institute/approx-chol/releases/tag/v0.8.1
 [0.8.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.8.0
@@ -399,4 +422,9 @@ for graph Laplacians in Rust with Python bindings.
 [#520]: https://github.com/aai-institute/approx-chol/issues/520
 [#522]: https://github.com/aai-institute/approx-chol/issues/522
 [#523]: https://github.com/aai-institute/approx-chol/issues/523
+[#524]: https://github.com/aai-institute/approx-chol/issues/524
 [#527]: https://github.com/aai-institute/approx-chol/issues/527
+[#528]: https://github.com/aai-institute/approx-chol/issues/528
+[#529]: https://github.com/aai-institute/approx-chol/issues/529
+[#530]: https://github.com/aai-institute/approx-chol/issues/530
+[#532]: https://github.com/aai-institute/approx-chol/issues/532
