@@ -151,6 +151,7 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             rows,
             vector,
             clamped: 0.0,
+            degrees: OnceCell::new(),
         };
         folded.clamped =
             (folded.past_band(folded.rows.deficits())).map_or(0.0, |past| past.fold(0.0, f64::max));
@@ -174,6 +175,8 @@ struct Folded<'p, T, I> {
     vector: ScaleVector,
     /// The worst `(Σ_j|m_ij| − m_ii)/m_ii` clamped past its row's band.
     clamped: f64,
+    /// Each row's entry count, counted once a band first needs it.
+    degrees: OnceCell<Vec<usize>>,
 }
 
 /// `u`'s own rounding, replayed: what it shifts each row's deficit by, and the worst clamped deficit past it.
@@ -241,8 +244,10 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         excess: impl Iterator<Item = f64> + Clone + 'a,
     ) -> Option<impl Iterator<Item = f64> + 'a> {
         let diagonal = self.rows.diagonal.iter().map(|&d| widen(d));
-        let degrees = row_degrees(diagonal.len(), self.m.off_diagonal());
-        (self.vector).past_band(widen(T::epsilon()), excess, diagonal, degrees)
+        // A residue's terms: at most `n − 1` entries a row, each row's count read on demand.
+        let max_k = diagonal.len().saturating_sub(1);
+        let degree = |i| self.degrees.get_or_init(|| self.m.off_diagonal().degrees())[i];
+        (self.vector).past_band(widen(T::epsilon()), excess, diagonal, (max_k, degree))
     }
 
     /// What `u = u*(1 + ρ)`, `ρ` by vertex, shifts row `i`'s `Σ_j|m_ij| − m_ii` by: exact `u` balances each row, and `ρ` shifts it by `Σ_j |m_ij| (ρ_j − ρ_i)` to first order. Replayed only where [`Folded::settle`] lets it lower an excess.
@@ -270,7 +275,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
 
     /// The one float-or-ground rule. A row's surplus is rounding within its band, [`ScaleVector::past_band`]: a residue `(M1)_i` at its `k_i` entries, less the block's reported clamp, whose twin it may be, and its own tracked rounding; a stated ground at none, and only where its residue is positive. `M` floats in the singular band with no stated ground and no residue past its band, or on a certificate; grounded, it keeps the rows past their band, or every residue when none is, as a balanced block needs a ground.
     fn settle<S: Surplus<T, I>>(
-        self,
+        mut self,
         (ones, trace): (f64, f64),
         surplus: &S,
     ) -> Result<IrreducibleBlock<T, I>, BuildError> {
@@ -308,6 +313,8 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
             }
             (false, None) => flat_grounds.into_inner().unwrap_or_else(flat),
         };
+        // Past its last band: the grounds below allocate as main's did once each band freed its count.
+        self.degrees.take();
         let vector = self.vector;
         if certificate || (in_band && residues_float && (grounds.is_none() || certified())) {
             return Ok((self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, report));
@@ -346,7 +353,9 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
             rows,
             vector,
             clamped,
+            degrees,
         } = self;
+        drop(degrees);
         let grounding = (grounds.as_deref()).map_or(Ok(Grounding::ungrounded()), |g| {
             surplus(&rows).kept(Some(g))
         });
@@ -417,14 +426,6 @@ pub(super) fn rows_where(n: usize, holds: impl Iterator<Item = bool>) -> Option<
         rows.get_or_insert_with(|| vec![false; n].into())[i] = true;
     }
     rows
-}
-
-/// A residue's terms: at most `n − 1` entries a row, each row's count read on demand.
-fn row_degrees<T: Real, I: Index>(
-    n: usize,
-    off_diagonal: &OffDiagonal<T, I>,
-) -> (usize, impl FnOnce() -> Vec<usize> + '_) {
-    (n.saturating_sub(1), || off_diagonal.degrees())
 }
 
 /// Local row `i` of the block on `vertices` computed a value out of range.

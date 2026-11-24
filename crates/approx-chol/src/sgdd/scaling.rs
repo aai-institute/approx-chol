@@ -123,28 +123,21 @@ pub(super) enum ScaleVector {
 }
 
 impl ScaleVector {
-    /// Each row's `excess_i / m_ii` past its band, `0` within it; `None` while every row is within the `RATIO_BAND ε` floor, which costs one pass; `degrees`, each `k_i ≤ max_k`, is read once and only for a row the bands at `0` and `max_k` leave open.
+    /// Each row's `excess_i / m_ii` past its band, `0` within it; `None` while every row is within the `RATIO_BAND ε` floor, which costs one pass; `degree(i) = k_i ≤ max_k` is read only for a row the bands at `0` and `max_k` leave open.
     pub(super) fn past_band(
         self,
         epsilon: f64,
         excess: impl Iterator<Item = f64> + Clone,
         diagonal: impl Iterator<Item = f64> + Clone,
-        (max_k, degrees): (usize, impl FnOnce() -> Vec<usize>),
+        (max_k, degree): (usize, impl Fn(usize) -> usize),
     ) -> Option<impl Iterator<Item = f64>> {
         let ratios = (excess.zip(diagonal)).map(|(e, d)| (e / d, d));
         if (ratios.clone()).all(|(ratio, _)| ratio <= RATIO_BAND * epsilon) {
             return None;
         }
-        let (mut degrees, mut read) = (Some(degrees), Vec::new());
         Some(ratios.enumerate().map(move |(i, (ratio, d))| {
             let past = |k| ratio > self.row_band(k, d, epsilon);
-            let past = past(0)
-                && (past(max_k) || {
-                    if let Some(degrees) = degrees.take() {
-                        read = degrees();
-                    }
-                    past(read[i])
-                });
+            let past = past(0) && (past(max_k) || past(degree(i)));
             match past {
                 true => ratio,
                 false => 0.0,
