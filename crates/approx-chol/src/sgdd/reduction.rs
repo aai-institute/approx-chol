@@ -3,6 +3,8 @@
 mod gram;
 mod graph;
 
+use std::cell::OnceCell;
+
 use num_traits::PrimInt;
 
 use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock};
@@ -243,13 +245,8 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         (self.vector).past_band(widen(T::epsilon()), excess, diagonal, degrees)
     }
 
-    /// What `u = u*(1 + ρ)`, `ρ` by vertex, shifts row `i`'s `Σ_j|m_ij| − m_ii` by: exact `u` balances each row, and `ρ` shifts it by `Σ_j |m_ij| (ρ_j − ρ_i)` to first order. Replayed only for a null-scaled `f64` row past its band: `u`'s `f64` rounding, ~1e-14 on a 10⁵ ring, moves no row past a wider `ε`'s band.
-    fn null_rounding<'r>(&self, rho: impl FnOnce() -> &'r [f64]) -> Option<NullRounding> {
-        let wide = widen(T::epsilon()) != f64::EPSILON;
-        if !matches!(self.vector, ScaleVector::NullVector) || self.clamped == 0.0 || wide {
-            return None;
-        }
-        let rho = rho();
+    /// What `u = u*(1 + ρ)`, `ρ` by vertex, shifts row `i`'s `Σ_j|m_ij| − m_ii` by: exact `u` balances each row, and `ρ` shifts it by `Σ_j |m_ij| (ρ_j − ρ_i)` to first order. Replayed only where [`Folded::settle`] lets it lower an excess.
+    fn null_rounding(&self, rho: &[f64]) -> NullRounding {
         let rho: Vec<f64> = (self.m.vertices().iter()).map(|v| rho[v.index()]).collect();
         let mut shifts = vec![0.0; rho.len()];
         self.m.off_diagonal().abs_times(&rho, &mut shifts);
@@ -257,7 +254,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
             *shift -= r * widen(s);
         }
         let clamp = self.reported(&shifts);
-        Some(NullRounding { shifts, clamp })
+        NullRounding { shifts, clamp }
     }
 
     /// The worst clamped deficit past what `shifts` explains. Only a positive shift is taken out, so a row is reported only if past its band both with and without it; a negative shift leaves the row on its flat deficit, and an unknown one leaves it as it was.
@@ -284,12 +281,32 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let certified = || certifier.as_ref().is_some_and(|c| c(self.m.vertices()));
         // A scaled Gram floats on its certificate alone, before any residue is read.
         let certificate = in_band && !residues_float && certified();
-        // One replay owns the tracked rounding: the report and the grounds read it.
-        let replay = surplus.rounding(&self);
+        let stated = stated.as_deref();
+        // Without a replay, the rows past their band less the flat clamp, read once.
+        let (flat, flat_grounds) = (
+            || self.ground_rows(surplus.residues(&self), stated, None),
+            OnceCell::new(),
+        );
+        let unheld = |g: &[bool]| {
+            (g.iter().zip(self.held(surplus.residues(&self), stated))).any(|(&g, held)| g && !held)
+        };
+        // One replay owns the tracked rounding: the report and the grounds read it. Only a null-scaled `f64` block's, as `u`'s rounding, ~1e-14 on a 10⁵ ring, moves no row past a wider `ε`'s band; and only where it lowers an excess: a clamp, or a flat ground neither its coupling nor a statement holds.
+        let replays = matches!(self.vector, ScaleVector::NullVector)
+            && widen(T::epsilon()) == f64::EPSILON
+            && (self.clamped > 0.0
+                || !certificate
+                    && flat_grounds
+                        .get_or_init(flat)
+                        .as_deref()
+                        .is_some_and(unheld));
+        let replay = replays.then(|| surplus.rounding(&self)).flatten();
         let report = replay.as_ref().map_or(self.clamped, |r| r.clamp);
-        let grounds = match certificate {
-            true => None,
-            false => self.ground_rows(surplus.residues(&self), stated.as_deref(), replay.as_ref()),
+        let grounds = match (certificate, &replay) {
+            (true, _) => None,
+            (false, Some(replay)) => {
+                self.ground_rows(surplus.residues(&self), stated, Some(replay))
+            }
+            (false, None) => flat_grounds.into_inner().unwrap_or_else(flat),
         };
         let vector = self.vector;
         if certificate || (in_band && residues_float && (grounds.is_none() || certified())) {
@@ -308,6 +325,17 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
             .kept(grounds.as_deref())
             .map_err(|i| out_of_range(self.m.vertices(), i))?;
         Ok((self.m).block(Balance::Balanced, grounding, vector, report))
+    }
+
+    /// Each row whose residue grounds it past any band: outweighing its coupling, or stated and positive.
+    fn held<'a>(
+        &'a self,
+        surplus: impl Iterator<Item = f64> + Clone + 'a,
+        stated: Option<&'a [bool]>,
+    ) -> impl Iterator<Item = bool> + Clone + 'a {
+        let stated = move |i: usize, s: f64| s > 0.0 && stated.is_some_and(|stated| stated[i]);
+        (surplus.zip(&self.rows.abs).enumerate())
+            .map(move |(i, (s, &abs))| s > widen(abs) || stated(i, s))
     }
 
     /// A frustrated `M`, definite without a ground, keeping none of its rounding.
@@ -346,11 +374,9 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         stated: Option<&[bool]>,
         rounding: Option<&NullRounding>,
     ) -> Option<Box<[bool]>> {
-        let RowSums { diagonal, abs } = &self.rows;
+        let diagonal = &self.rows.diagonal;
         let clamp = rounding.map_or(self.clamped, |r| r.clamp);
-        let stated = |i: usize, s: f64| s > 0.0 && stated.is_some_and(|stated| stated[i]);
-        let ground = (surplus.clone().zip(abs).enumerate())
-            .map(|(i, (s, &abs))| s > widen(abs) || stated(i, s));
+        let ground = self.held(surplus.clone(), stated);
         let excess = (surplus.zip(diagonal)).map(move |(s, &d)| s - clamp * widen(d));
         match rounding {
             None => self.rows_past(ground, excess),
