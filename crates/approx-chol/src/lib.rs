@@ -43,6 +43,25 @@ macro_rules! checked_serde {
     };
 }
 
+/// A value in `u32` indices or `u64` ones, whichever its size needs.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug)]
+enum Indexed<N, W> {
+    U32(N),
+    U64(W),
+}
+
+/// Runs `$body` on the value, whichever index type stores it.
+macro_rules! on {
+    ($value:expr, $each:ident => $body:expr) => {
+        match $value {
+            crate::Indexed::U32($each) => $body,
+            crate::Indexed::U64($each) => $body,
+        }
+    };
+}
+
+// Below `on!`: a macro_rules macro is visible only to modules declared after it.
 mod adapters;
 mod batch;
 mod error;
@@ -51,7 +70,6 @@ pub mod input;
 mod order;
 mod sgdd;
 mod storage;
-mod threads;
 
 use std::array;
 use std::fmt::Debug;
@@ -66,8 +84,9 @@ pub use factor::{
     ColumnMajor, Columns, Complement, Component, Config, CoverSurplus, FrustratedRoute, Header,
     HeaderMismatch, LayoutError, MatrixMut, Sampling, Scalar, SchurMode, Sgdd,
 };
+use inflight::parallel::Blocks;
+pub use inflight::parallel::Threads;
 pub use sgdd::{Clamp, ScalingOutcome, ScalingPolicy};
-pub use threads::Threads;
 
 /// The scalar every stage computes in: `f32` or `f64`, each summed in `f64`, which holds it exactly.
 pub trait Real: Float + TotalOrder + Debug + Send + Sync + 'static + seal::Real {}
@@ -76,7 +95,7 @@ impl Real for f32 {}
 impl Real for f64 {}
 
 /// The unsigned integer a reduction and its factor store each vertex index in: `u32` while a cover's `2n + 1` slots fit it, else `u64`.
-trait Index: PrimInt + Unsigned + Send + Sync + 'static {
+trait Index: PrimInt + Unsigned + Send + Sync + 'static + inflight::parallel::ListedIndex {
     /// `self` as `usize`, so `x[v.index()]` reads vertex `v` of any `x` over `A`'s vertices.
     fn index(self) -> usize;
 
@@ -181,6 +200,12 @@ fn compensated_sum<X: Copy, W: Batch<f64>>(x: &[X], term: impl Fn(usize, X) -> W
     sum.add(carry)
 }
 
+/// `units` per task so each carries `2^bits` of `work`, at least one; `bits` below 64.
+fn grain(units: usize, work: u64, bits: u32) -> usize {
+    let per = ((units as u128) << bits).div_ceil(u128::from(work.max(1)));
+    usize::try_from(per).unwrap_or(usize::MAX).max(1)
+}
+
 /// Terms a task of [`chunked_sum`] sums alone; fixed, so no sum's bits depend on the threads.
 const SUM_CHUNK: usize = 1 << 15;
 
@@ -191,7 +216,7 @@ const SPLIT_VALUES: usize = 1 << 19;
 fn pass_threads(values: usize, threads: Threads) -> Threads {
     match values >= SPLIT_VALUES {
         true => threads,
-        false => threads::ONE,
+        false => Threads::ONE,
     }
 }
 
@@ -201,36 +226,14 @@ fn chunked_sum<X: Copy + Sync, W: Batch<f64>>(
     term: impl Fn(usize, X) -> W + Sync,
     threads: Threads,
 ) -> W {
-    fn tree<X: Copy + Sync, W: Batch<f64>>(
-        x: &[X],
-        start: usize,
-        term: &(impl Fn(usize, X) -> W + Sync),
-        threads: Threads,
-    ) -> Sum2<W> {
-        if x.len() <= SUM_CHUNK {
-            return Sum2::of(x, |i, x| term(start + i, x));
-        }
-        let mid = x.len().div_ceil(SUM_CHUNK) / 2 * SUM_CHUNK;
-        let (left, right) = x.split_at(mid);
-        let (left, right) = match threads.tasks() > 1 {
-            true => {
-                let (first, second) = threads.halves();
-                rayon::join(
-                    || tree(left, start, term, first),
-                    || tree(right, start + mid, term, second),
-                )
-            }
-            false => (
-                tree(left, start, term, threads),
-                tree(right, start + mid, term, threads),
-            ),
-        };
-        left.merge(right)
+    if x.len() <= SUM_CHUNK {
+        return compensated_sum(x, term);
     }
-    match x.len() <= SUM_CHUNK {
-        true => compensated_sum(x, term),
-        false => tree(x, 0, &term, pass_threads(x.len() * W::LANES, threads)).total(),
-    }
+    let threads = pass_threads(x.len() * W::LANES, threads);
+    let leaf = |(start, x): (usize, &[X])| Sum2::of(x, |i, x| term(start + i, x));
+    let merge = |left: Sum2<W>, right| left.merge(right);
+    let blocks = Blocks::new(x, SUM_CHUNK);
+    threads.fold_tree(blocks, leaf, merge).total()
 }
 
 /// Ogita–Rump–Oishi Sum2 (SISC 26(6), 2005) in eight fixed TwoSum lanes: off by at most `ε|Σx| + (nε)² Σ|x|`.
@@ -316,8 +319,17 @@ fn two_sum<W: Batch<f64>>(a: W, b: W) -> (W, W) {
 
 #[cfg(test)]
 mod tests {
-    use super::{argmax, chunked_sum, compensated_sum, Sum2, Threads, SPLIT_VALUES, SUM_CHUNK};
-    use crate::threads::ONE;
+    use super::{
+        argmax, chunked_sum, compensated_sum, grain, Sum2, Threads, SPLIT_VALUES, SUM_CHUNK,
+    };
+
+    #[test]
+    fn a_grain_past_u64_saturates() {
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(grain(1 << 40, 1 << 50, 30), 1 << 20);
+        assert_eq!(grain(usize::MAX, 1, 8), usize::MAX);
+        assert_eq!(grain(10, 0, 0), 10);
+    }
 
     /// The gauge pin's choice, which a factor's bits follow: a tie with the last entry keeps the last, else the first of the earlier maxima; a NaN never wins.
     #[test]
@@ -380,7 +392,7 @@ mod tests {
             .build()
             .unwrap();
         let three = Threads::Count(std::num::NonZeroUsize::new(3).unwrap());
-        let sums: Vec<f64> = [ONE, three, Threads::All]
+        let sums: Vec<f64> = [Threads::ONE, three, Threads::All]
             .map(|threads| pool.install(|| chunked_sum(&values, |_, x| x, threads)))
             .into();
         assert!(

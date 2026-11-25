@@ -1,4 +1,4 @@
-//! faer's row-major sparse matrices as [`CsrRef`] views, its dense ones as blocks of right-hand sides, its parallelism as a [`Threads`] budget, and an [`ApproxInverse`] as faer's operator.
+//! faer's row-major sparse matrices as [`CsrRef`] views, its dense ones as blocks of right-hand sides, and an [`ApproxInverse`] as faer's operator, which reads the `Par` each of its methods takes as a [`Threads`] budget.
 
 use std::num::NonZeroUsize;
 
@@ -42,10 +42,8 @@ impl<'a, T: Real, I: faer::Index + PrimInt> TryFrom<SparseRowMatRef<'a, I, T>>
 }
 
 /// faer's `Par::Seq` is `Count(1)`, `Par::Rayon(n)` is `Count(n)`.
-impl From<Par> for Threads {
-    fn from(par: Par) -> Self {
-        Threads::Count(NonZeroUsize::new(par.degree()).unwrap_or(NonZeroUsize::MIN))
-    }
+fn threads(par: Par) -> Threads {
+    Threads::Count(NonZeroUsize::new(par.degree()).unwrap_or(NonZeroUsize::MIN))
 }
 
 fn read_column<T: Real>(block: MatRef<'_, T>, column: usize, into: &mut [T]) {
@@ -189,7 +187,7 @@ fn apply_in_place<T: Real>(
     par: Par,
     stack: &mut MemStack,
 ) {
-    or_panic(inverse.apply_with(&mut rhs, par.into(), stack));
+    or_panic(inverse.apply_with(&mut rhs, threads(par), stack));
 }
 
 /// `rhs` copied into `out` and applied there; with columns, either of other rows than `n` panics as the apply errs, before the copy.
@@ -216,7 +214,7 @@ fn apply<T: Real + ComplexField>(
 // B is real and symmetric: its conjugate, transpose and adjoint all apply as B does.
 impl<T: Real + ComplexField> LinOp<T> for ApproxInverse<T> {
     fn apply_scratch(&self, rhs_ncols: usize, par: Par) -> StackReq {
-        self.scratch(rhs_ncols, par.into())
+        self.scratch(rhs_ncols, threads(par))
     }
 
     fn nrows(&self) -> usize {
@@ -295,5 +293,21 @@ impl<T: Real + ComplexField> BiPrecond<T> for ApproxInverse<T> {
     #[track_caller]
     fn adjoint_apply_in_place(&self, rhs: MatMut<'_, T>, par: Par, stack: &mut MemStack) {
         apply_in_place(self, rhs, par, stack);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_par_is_a_thread_budget() {
+        assert_eq!(threads(Par::Seq), Threads::Count(NonZeroUsize::MIN));
+        for n in [1, 3, 12] {
+            let count = NonZeroUsize::new(n).unwrap();
+            assert_eq!(threads(Par::Rayon(count)), Threads::Count(count));
+        }
+        let pool = NonZeroUsize::new(rayon::current_num_threads()).unwrap();
+        assert_eq!(threads(Par::rayon(0)), Threads::Count(pool));
     }
 }

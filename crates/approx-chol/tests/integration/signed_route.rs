@@ -272,7 +272,7 @@ mod serde {
     }
 
     fn cholesky(payload: &mut serde_json::Value) -> &mut serde_json::Value {
-        &mut payload[1][1]["U32"][0]["cholesky"]
+        &mut payload[1][2]["U32"][0]["cholesky"]
     }
 
     #[test]

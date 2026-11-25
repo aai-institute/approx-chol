@@ -607,7 +607,6 @@ mod tests {
     use crate::factor::{within_one, Streams};
     use crate::sgdd::{Balance, Grounding};
     use crate::storage::{Rows, UpperAdjacency};
-    use crate::threads::ONE;
     use crate::widen;
 
     /// Every vertex left, numbered by itself.
@@ -1189,7 +1188,7 @@ mod tests {
             let cross = Rows::new(ptrs.clone(), indices.clone(), values, n_k);
             let grounding = Grounding::of(surplus.clone());
             let block = BipartiteBlock::of(cross, balance, grounding);
-            block.complement(&config, streams, ONE)
+            block.complement(&config, streams, crate::Threads::ONE)
         };
         let sddm = complement(z, Balance::Balanced);
         let signed = complement(signed, Balance::Frustrated);

@@ -276,18 +276,18 @@ fn behind(declared: impl serde::Serialize) -> Vec<u8> {
 #[rstest]
 #[case::from_the_old_crate(
     Header { version: 0x4143_0005, scalar: Scalar::F64 },
-    "format version 0x41430005, expected format version 0x4143000f"
+    "format version 0x41430005, expected format version 0x41430010"
 )]
 #[case::from_a_future_release(
-    Header { version: 0x4143_0010, scalar: Scalar::F64 },
-    "format version 0x41430010, expected format version 0x4143000f"
+    Header { version: 0x4143_0011, scalar: Scalar::F64 },
+    "format version 0x41430011, expected format version 0x41430010"
 )]
 #[case::zero(
     Header { version: 0, scalar: Scalar::F64 },
-    "format version 0x00000000, expected format version 0x4143000f"
+    "format version 0x00000000, expected format version 0x41430010"
 )]
 #[case::of_f32(
-    Header { version: 0x4143_000F, scalar: Scalar::F32 },
+    Header { version: 0x4143_0010, scalar: Scalar::F32 },
     "scalar f32, expected scalar f64"
 )]
 fn a_payload_of_another_header_is_rejected_by_name(#[case] declared: Header, #[case] named: &str) {
@@ -340,7 +340,7 @@ fn a_header_wrong_in_both_is_rejected_by_version_first() {
     let mismatch = declared.expect::<f64>().expect_err("another header");
     assert_eq!(
         mismatch.to_string(),
-        "format version 0x00000000, expected format version 0x4143000f; \
+        "format version 0x00000000, expected format version 0x41430010; \
          scalar f32, expected scalar f64"
     );
     let error = |json: &str| {
@@ -350,7 +350,7 @@ fn a_header_wrong_in_both_is_rejected_by_version_first() {
     };
     let in_order = error(r#"[[0, "f32"]]"#);
     assert!(
-        in_order.contains("format version 0x00000000, expected format version 0x4143000f")
+        in_order.contains("format version 0x00000000, expected format version 0x41430010")
             && !in_order.contains("scalar"),
         "{in_order}"
     );
@@ -390,7 +390,7 @@ const RELEASED_0_7_JSON: &str = r#"[1094909961,[3,[],[{"U32":{"restriction":{"ve
     "invalid type: integer `1094909961`, expected struct Header"
 )]
 #[case::empty(r#"[[]]"#, "invalid length 0, expected struct Header")]
-#[case::version_alone(r#"[[1094909967]]"#, "invalid length 1, expected struct Header")]
+#[case::version_alone(r#"[[1094909968]]"#, "invalid length 1, expected struct Header")]
 fn a_json_header_not_of_two_fields_is_rejected(#[case] json: &str, #[case] named: &str) {
     let error = serde_json::from_str::<ApproxInverse>(json)
         .expect_err("no header")
@@ -400,13 +400,13 @@ fn a_json_header_not_of_two_fields_is_rejected(#[case] json: &str, #[case] named
 
 #[test]
 fn an_unknown_scalar_discriminant_is_corrupt() {
-    let payload = behind((0x4143_000Fu32, 2u8));
+    let payload = behind((0x4143_0010u32, 2u8));
     postcard::from_bytes::<ApproxInverse>(&payload).expect_err("no scalar 2");
 }
 
 #[rstest]
-#[case::named(r#"[{"version": 1094909967, "scalar": "f16"}]"#)]
-#[case::in_order(r#"[[1094909967, "f16"]]"#)]
+#[case::named(r#"[{"version": 1094909968, "scalar": "f16"}]"#)]
+#[case::in_order(r#"[[1094909968, "f16"]]"#)]
 fn an_unknown_scalar_name_is_rejected(#[case] json: &str) {
     let error = serde_json::from_str::<ApproxInverse>(json)
         .expect_err("no scalar f16")

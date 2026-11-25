@@ -1,7 +1,5 @@
 use std::borrow::Cow;
 
-use rayon::prelude::*;
-
 use crate::{
     argmax, chunked_sum, compensated_sum, pass_threads, widen, Batch, Real, Threads, SUM_CHUNK,
 };
@@ -223,8 +221,5 @@ fn project_out<T: Real, V: Batch<T>>(
             *x = V::narrow(x.widen().sub(along.mul(widen(u(start + i)))));
         }
     };
-    match pass_threads(x.len() * V::LANES, threads).per_task(x.len(), SUM_CHUNK) {
-        Some(per) => (x.par_chunks_mut(per).enumerate()).for_each(|(k, x)| subtract(k * per, x)),
-        None => subtract(0, x),
-    }
+    pass_threads(x.len() * V::LANES, threads).for_each_chunk(x, SUM_CHUNK, subtract);
 }

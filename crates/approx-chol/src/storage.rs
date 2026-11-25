@@ -1,8 +1,6 @@
 //! Sparse storage shapes every stage reads.
 
-use rayon::prelude::*;
-
-use crate::{narrow, widen, Index, Real, Sum2};
+use crate::{narrow, widen, Index, Real, Sum2, Threads};
 
 /// Compressed sparse rows.
 #[cfg_attr(
@@ -262,17 +260,21 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.transpose()
     }
 
-    /// [`OffDiagonal::abs_times`] gathered by row, `per` rows a task, `lower` from [`lower`](Self::lower): each row sums its lower entries, then its upper ones, each from `0` in the scatter's order, so the bits match.
-    pub(crate) fn abs_gathered(&self, lower: &Rows<T, I>, per: usize, x: &[f64], out: &mut [f64]) {
+    /// [`OffDiagonal::abs_times`] gathered by row, at least `grain` rows a task under `threads`, `lower` from [`lower`](Self::lower): each row sums its lower entries, then its upper ones, each from `0` in the scatter's order, so the bits match.
+    pub(crate) fn abs_gathered(
+        &self,
+        lower: &Rows<T, I>,
+        (threads, grain): (Threads, usize),
+        x: &[f64],
+        out: &mut [f64],
+    ) {
         let sum = |rows: &Rows<T, I>, i: usize| {
             (rows.row(i)).fold(0.0, |sum, (j, &a)| sum + widen(a.abs()) * x[j])
         };
-        (out.par_chunks_mut(per).enumerate()).for_each(|(task, out)| {
-            crate::threads::task(|| {
-                (task * per..)
-                    .zip(out)
-                    .for_each(|(i, out)| *out = sum(lower, i) + sum(&self.rows, i));
-            });
+        threads.for_each_chunk(out, grain, |start, out| {
+            (start..)
+                .zip(out)
+                .for_each(|(i, out)| *out = sum(lower, i) + sum(&self.rows, i));
         });
     }
 }
@@ -491,7 +493,7 @@ mod tests {
                 general.abs_times(&x, &mut scattered);
                 for per in [1, 2, 3, 7, n, n + 5] {
                     let mut gathered = vec![7.0; n];
-                    adjacency.abs_gathered(&lower, per, &x, &mut gathered);
+                    adjacency.abs_gathered(&lower, (Threads::All, per), &x, &mut gathered);
                     let bits = |v: &[f64]| v.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
                     assert_eq!(
                         bits(&gathered),
@@ -503,13 +505,14 @@ mod tests {
         }
     }
 
+    // On a pool of several threads, so every grain below a matrix's rows splits it.
     #[test]
     fn a_gathered_product_matches_the_scatter_at_f64() {
-        gathered_matches_scatter::<f64>();
+        inflight::parallel::testing::in_pool(4, gathered_matches_scatter::<f64>);
     }
 
     #[test]
     fn a_gathered_product_matches_the_scatter_at_f32() {
-        gathered_matches_scatter::<f32>();
+        inflight::parallel::testing::in_pool(4, gathered_matches_scatter::<f32>);
     }
 }

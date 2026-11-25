@@ -10,8 +10,8 @@ const GATHER_GRAIN_BITS: u32 = 13;
 /// `N = D^{-1/2}|offdiag(A_c)|D^{-1/2}`: scales `R` make `R|A_c|R` dominant iff `N y ≤ y` for `y = R√D`, so iff `ρ(N) ≤ 1` (Boman, Chen, Parekh, Toledo, LAA 2005).
 pub(super) struct Normalized<'a, T, I> {
     off_diagonal: &'a OffDiagonal<T, I>,
-    /// A general block's strict lower triangle and the rows a task gathers, where its products gather: 12 bytes an entry and 8 a row at `f64` and `u32`, for one relaxation.
-    lower: Option<(Rows<T, I>, usize)>,
+    /// A general block's strict lower triangle, and the budget and the fewest rows a task gathers, where its products gather: 12 bytes an entry and 8 a row at `f64` and `u32`, for one relaxation.
+    lower: Option<(Rows<T, I>, (Threads, usize))>,
     inv_sqrt: Box<[f64]>,
     /// A product's operand times its scales, formed once per product, not per entry read.
     scaled: Cell<Vec<f64>>,
@@ -27,11 +27,10 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
         let lower = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let (rows, work) = (adjacency.n(), 2 * adjacency.nnz() as u64);
-                let grain = crate::threads::grain(rows, work, GATHER_GRAIN_BITS);
+                let grain = crate::grain(rows, work, GATHER_GRAIN_BITS);
                 // Each entry one lower and one upper multiply-add; unsplit, the scatter runs.
-                threads
-                    .per_task(rows, grain)
-                    .map(|per| (adjacency.lower(), per))
+                (threads.per_task(rows, grain).is_some())
+                    .then(|| (adjacency.lower(), (threads, grain)))
             }
             // Its iteration runs on the kept side: a gather would serve only the probes.
             OffDiagonal::Bipartite(_) => None,
@@ -73,8 +72,8 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
     /// `out = |offdiag(A_c)| x`, gathered where the lower triangle is kept and the rows split.
     fn abs_times(&self, x: &[f64], out: &mut [f64]) {
         match (self.off_diagonal, &self.lower) {
-            (OffDiagonal::General(adjacency), Some((lower, per))) => {
-                adjacency.abs_gathered(lower, *per, x, out);
+            (OffDiagonal::General(adjacency), Some((lower, split))) => {
+                adjacency.abs_gathered(lower, *split, x, out);
             }
             _ => self.off_diagonal.abs_times(x, out),
         }

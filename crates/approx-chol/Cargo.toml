@@ -13,12 +13,13 @@ categories.workspace = true
 # A nested workspace nothing in the published crate reads.
 exclude = ["fuzz"]
 
-# The workspace's, but unsafe code denied, not forbidden: factor/spread.rs alone allows it, to write blocks of one solve at once.
+# The workspace's, but unsafe code denied, not forbidden: the counting allocators of a test and the benches allow it.
 [lints.rust]
 unsafe_code = "deny"
 
 [dependencies]
 dyn-stack = { version = "0.13.2", default-features = false, features = ["alloc"] }
+inflight = { version = "0.2.0", features = ["rayon"] }
 num-traits = "0.2.18"
 rand = "0.10.0"
 rayon = "1.6"
@@ -37,6 +38,7 @@ nalgebra = ["dep:nalgebra", "dep:nalgebra-sparse"]
 ndarray = ["dep:ndarray"]
 
 [dev-dependencies]
+inflight = { version = "0.2.0", features = ["testing"] }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 faer = { version = "0.24", default-features = false, features = ["rayon"] }
 postcard = { version = "1", features = ["use-std"] }

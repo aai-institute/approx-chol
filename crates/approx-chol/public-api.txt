@@ -2,6 +2,7 @@ pub mod approx_chol
 pub use approx_chol::MemBuffer
 pub use approx_chol::MemStack
 pub use approx_chol::StackReq
+pub use approx_chol::Threads
 pub mod approx_chol::input
 #[non_exhaustive] pub enum approx_chol::input::InputError
 pub approx_chol::input::InputError::Diagonal
@@ -343,28 +344,14 @@ impl serde_core::ser::Serialize for approx_chol::SchurMode
 pub fn approx_chol::SchurMode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for approx_chol::SchurMode
 pub fn approx_chol::SchurMode::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-pub enum approx_chol::Threads
-pub approx_chol::Threads::All
-pub approx_chol::Threads::Count(core::num::nonzero::NonZeroUsize)
-impl core::clone::Clone for approx_chol::Threads
-pub fn approx_chol::Threads::clone(&self) -> Self
-impl core::cmp::Eq for approx_chol::Threads
-impl core::cmp::PartialEq for approx_chol::Threads
-pub fn approx_chol::Threads::eq(&self, &Self) -> bool
-impl core::convert::From<faer::Par> for approx_chol::Threads
-pub fn approx_chol::Threads::from(faer::Par) -> Self
-impl core::fmt::Debug for approx_chol::Threads
-pub fn approx_chol::Threads::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for approx_chol::Threads
-impl core::marker::StructuralPartialEq for approx_chol::Threads
 pub struct approx_chol::ApproxInverse<T>
 impl<T: approx_chol::Real> approx_chol::ApproxInverse<T>
-pub fn approx_chol::ApproxInverse<T>::apply<M: approx_chol::MatrixMut<T> + ?core::marker::Sized>(&self, &mut M, approx_chol::Threads) -> core::result::Result<(), approx_chol::ApplyError>
-pub fn approx_chol::ApproxInverse<T>::apply_with<M: approx_chol::MatrixMut<T> + ?core::marker::Sized>(&self, &mut M, approx_chol::Threads, &mut dyn_stack::MemStack) -> core::result::Result<(), approx_chol::ApplyError>
+pub fn approx_chol::ApproxInverse<T>::apply<M: approx_chol::MatrixMut<T> + ?core::marker::Sized>(&self, &mut M, inflight::parallel::budget::Threads) -> core::result::Result<(), approx_chol::ApplyError>
+pub fn approx_chol::ApproxInverse<T>::apply_with<M: approx_chol::MatrixMut<T> + ?core::marker::Sized>(&self, &mut M, inflight::parallel::budget::Threads, &mut dyn_stack::MemStack) -> core::result::Result<(), approx_chol::ApplyError>
 pub fn approx_chol::ApproxInverse<T>::components(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = approx_chol::Component<'_, T>>
 pub fn approx_chol::ApproxInverse<T>::n(&self) -> usize
 pub fn approx_chol::ApproxInverse<T>::n_steps(&self) -> usize
-pub fn approx_chol::ApproxInverse<T>::scratch(&self, usize, approx_chol::Threads) -> dyn_stack::stack_req::StackReq
+pub fn approx_chol::ApproxInverse<T>::scratch(&self, usize, inflight::parallel::budget::Threads) -> dyn_stack::stack_req::StackReq
 impl<'de, T: approx_chol::Real + serde_core::de::Deserialize<'de>> serde_core::de::Deserialize<'de> for approx_chol::ApproxInverse<T>
 pub fn approx_chol::ApproxInverse<T>::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::BiLinOp<T> for approx_chol::ApproxInverse<T>
@@ -437,8 +424,8 @@ pub fn approx_chol::Columns<'_, C>::write_column(&mut self, usize, &[T])
 pub struct approx_chol::Complement<T>(_)
 impl<T: approx_chol::Real> approx_chol::Complement<T>
 pub fn approx_chol::Complement<T>::clamps(&self) -> impl core::iter::traits::iterator::Iterator<Item = approx_chol::Clamped<'_>>
-pub fn approx_chol::Complement<T>::factor(self, approx_chol::Config, approx_chol::Threads) -> approx_chol::ApproxInverse<T>
-pub fn approx_chol::Complement<T>::reduce_onto<I: num_traits::int::PrimInt + core::marker::Sync>(approx_chol::input::BipartiteFactorWidth2<'_, T, I>, approx_chol::input::Side, approx_chol::ScalingPolicy, approx_chol::Threads) -> core::result::Result<Self, approx_chol::BuildError>
+pub fn approx_chol::Complement<T>::factor(self, approx_chol::Config, inflight::parallel::budget::Threads) -> approx_chol::ApproxInverse<T>
+pub fn approx_chol::Complement<T>::reduce_onto<I: num_traits::int::PrimInt + core::marker::Sync>(approx_chol::input::BipartiteFactorWidth2<'_, T, I>, approx_chol::input::Side, approx_chol::ScalingPolicy, inflight::parallel::budget::Threads) -> core::result::Result<Self, approx_chol::BuildError>
 impl<T: core::clone::Clone> core::clone::Clone for approx_chol::Complement<T>
 pub fn approx_chol::Complement<T>::clone(&self) -> Self
 impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::Complement<T>
@@ -533,8 +520,8 @@ pub fn approx_chol::ScalingPolicy::deserialize<__D>(__D) -> core::result::Result
 pub struct approx_chol::Sgdd<T>(_)
 impl<T: approx_chol::Real> approx_chol::Sgdd<T>
 pub fn approx_chol::Sgdd<T>::clamps(&self) -> impl core::iter::traits::iterator::Iterator<Item = approx_chol::Clamped<'_>>
-pub fn approx_chol::Sgdd<T>::factor(self, approx_chol::Config, approx_chol::Threads) -> approx_chol::ApproxInverse<T>
-pub fn approx_chol::Sgdd<T>::reduce<'a, I, M>(M, approx_chol::ScalingPolicy, approx_chol::Threads) -> core::result::Result<Self, approx_chol::BuildError> where I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
+pub fn approx_chol::Sgdd<T>::factor(self, approx_chol::Config, inflight::parallel::budget::Threads) -> approx_chol::ApproxInverse<T>
+pub fn approx_chol::Sgdd<T>::reduce<'a, I, M>(M, approx_chol::ScalingPolicy, inflight::parallel::budget::Threads) -> core::result::Result<Self, approx_chol::BuildError> where I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
 impl<T: core::clone::Clone> core::clone::Clone for approx_chol::Sgdd<T>
 pub fn approx_chol::Sgdd<T>::clone(&self) -> Self
 impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::Sgdd<T>
