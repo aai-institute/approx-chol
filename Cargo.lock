@@ -54,6 +54,7 @@ dependencies = [
  "criterion",
  "dyn-stack",
  "faer",
+ "inflight",
  "nalgebra",
  "nalgebra-sparse",
  "ndarray",
@@ -825,6 +826,16 @@ dependencies = [
  "hashbrown 0.16.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "inflight"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd9926b6e5450b834531877a305b6c0cba8eed06a4f684d17e2fc3e6fc6635f"
+dependencies = [
+ "dyn-stack",
+ "rayon",
 ]
 
 [[package]]

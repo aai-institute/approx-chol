@@ -19,7 +19,7 @@ unsafe_code = "deny"
 
 [dependencies]
 dyn-stack = { version = "0.13.2", default-features = false, features = ["alloc"] }
-inflight = { version = "0.1.1", features = ["rayon"] }
+inflight = { version = "0.2.0", features = ["rayon"] }
 num-traits = "0.2.18"
 rand = "0.10.0"
 rayon = "1.6"
@@ -38,7 +38,7 @@ nalgebra = ["dep:nalgebra", "dep:nalgebra-sparse"]
 ndarray = ["dep:ndarray"]
 
 [dev-dependencies]
-inflight = { version = "0.1.1", features = ["testing"] }
+inflight = { version = "0.2.0", features = ["testing"] }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 faer = { version = "0.24", default-features = false, features = ["rayon"] }
 postcard = { version = "1", features = ["use-std"] }
