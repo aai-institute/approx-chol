@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING:** `Threads` no longer converts from faer's `Par`; faer's operator methods still take a `Par`.
 - The crate's code holds no `unsafe`: a factor's blocks keep their vertices in inflight's `Partition`, checked disjoint once when built or loaded, and a spread solve writes each block through the claim inflight hands out once. The persisted format is unchanged.
 
+### Fixed
+
+- A loop's task size is computed in `u128`: past `2^(64 − bits)` rows of work its `u64` shift lost high bits and the tasks came out too small. Only scheduling changes, never a result.
+
 ## [0.8.3] - 2026-11-24
 
 The elimination order changed on grids, AKM and random graphs, so factors differ from 0.8.2 there. API and persisted format are unchanged.

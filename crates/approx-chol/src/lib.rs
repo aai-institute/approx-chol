@@ -306,6 +306,7 @@ mod tests {
 
     #[test]
     fn a_grain_past_u64_saturates() {
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(grain(1 << 40, 1 << 50, 30), 1 << 20);
         assert_eq!(grain(usize::MAX, 1, 8), usize::MAX);
         assert_eq!(grain(10, 0, 0), 10);

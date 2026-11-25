@@ -505,13 +505,14 @@ mod tests {
         }
     }
 
+    // On a pool of several threads, so every grain below a matrix's rows splits it.
     #[test]
     fn a_gathered_product_matches_the_scatter_at_f64() {
-        gathered_matches_scatter::<f64>();
+        inflight::parallel::testing::in_pool(4, gathered_matches_scatter::<f64>);
     }
 
     #[test]
     fn a_gathered_product_matches_the_scatter_at_f32() {
-        gathered_matches_scatter::<f32>();
+        inflight::parallel::testing::in_pool(4, gathered_matches_scatter::<f32>);
     }
 }

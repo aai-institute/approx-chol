@@ -1,4 +1,4 @@
-//! faer's row-major sparse matrices as [`CsrRef`] views, its dense ones as blocks of right-hand sides, its parallelism as a [`Threads`] budget, and an [`ApproxInverse`] as faer's operator.
+//! faer's row-major sparse matrices as [`CsrRef`] views, its dense ones as blocks of right-hand sides, and an [`ApproxInverse`] as faer's operator, which reads the `Par` each of its methods takes as a [`Threads`] budget.
 
 use std::num::NonZeroUsize;
 
