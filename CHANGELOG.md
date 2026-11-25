@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING:** `Threads` is inflight's `parallel::Threads`, re-exported with its splits (`tasks`, `per_task`, `within_task`, `halves`, `schedule`, `for_each_chunk`): the same budget type schwarz-precond and within take, so a breaking inflight release is a breaking approx-chol release. A budget's splits, the fixed-tree sums and the stack regions of a spread solve come from inflight's `parallel`, with bit-identical results.
+- **BREAKING:** `Threads` is inflight 0.2's `parallel::Threads`, re-exported: the same budget type schwarz-precond and within take, so a breaking inflight release is a breaking approx-chol release. A budget's splits, the fixed-tree sums and the stack regions of a spread solve come from inflight's `parallel`, with bit-identical results.
 - **BREAKING:** `Threads` no longer converts from faer's `Par`; faer's operator methods still take a `Par`.
 - The crate's code holds no `unsafe`: a factor's blocks keep their vertices in inflight's `Partition`, checked disjoint once when built or loaded, and a spread solve writes each block through the claim inflight hands out once. The persisted format is unchanged.
 
