@@ -2,7 +2,6 @@
 
 use super::spread::Room;
 use super::ApproxInverse;
-use crate::threads::ONE;
 use crate::{Batch, MemBuffer, MemStack, Real, StackReq, Threads};
 
 /// Errors an apply returns, leaving the block as it was.
@@ -402,7 +401,7 @@ impl<T: Real> Kernel<'_, T> {
         let mut allocated;
         let stack = match stack {
             Stack::Holds(stack) => {
-                let need = need(&Room::of(inverse, ONE));
+                let need = need(&Room::of(inverse, Threads::ONE));
                 // An overflowing requirement's alignment is 0, on which can_hold panics.
                 if need.align_bytes() == 0 || !stack.can_hold(need) {
                     return Err(scratch_error());

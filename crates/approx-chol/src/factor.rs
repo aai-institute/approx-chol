@@ -20,7 +20,9 @@ pub use build::{factorize, factorize_complement, factorize_with, Clamped, Comple
 pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 pub use header::{Header, HeaderMismatch, Scalar};
 
-use crate::order::{Order, Rows, Segment, Slots};
+#[cfg(feature = "serde")]
+use crate::order::Segment;
+use crate::order::{on_claimed, Order, Slots};
 use crate::sgdd::{BlockComplement, Congruence, CoupledBlock, IrreducibleBlock, Packed};
 use crate::storage::OffDiagonal;
 use crate::Clamp;
@@ -59,7 +61,7 @@ pub(crate) enum Indexed<N, W> {
     U64(W),
 }
 
-/// Every coupled block's factor, block `k` on `order`'s segment `k`.
+/// Every coupled block's factor, block `k` on `order`'s set `k`.
 pub(crate) type Blocks<T> = Indexed<Box<[Block<T, u32>]>, Box<[Block<T, u64>]>>;
 
 impl<T> From<Box<[Block<T, u32>]>> for Blocks<T> {
@@ -101,23 +103,23 @@ impl<T: Real> ApproxInverse<T> {
     {
         let Packed {
             order,
-            segments,
             coupled,
             pivots,
         } = packed;
         let inverse_pivots = pivots.iter().map(|&pivot| T::one() / pivot).collect();
         let workspace = || Workspace::new(config.sampling.copies());
-        let factored = threads.split(coupled.len(), 1).map_init(
-            workspace,
-            coupled,
-            |reused, k, block, nested| block.factor(segments[k], &order, config, nested, reused),
-        );
+        let factored =
+            threads
+                .schedule(1)
+                .map_init(workspace, coupled, |reused, k, block, nested| {
+                    block.factor(order.slots(k), config, nested, reused)
+                });
         let blocks = Blocks::from(factored.into_boxed_slice());
         Self::new(order, blocks, inverse_pivots)
     }
 
     fn new(order: Order, blocks: Blocks<T>, inverse_pivots: Box<[T]>) -> Self {
-        let coupled = on!(&blocks, blocks => Coupled::of(blocks));
+        let coupled = on!(&blocks, blocks => Coupled::of(blocks, &order));
         Self {
             order,
             blocks,
@@ -206,11 +208,10 @@ impl<T: Real> ApproxInverse<T> {
 
 /// A coupled summand of the factored matrix: a block of `A`, or a block's complement onto its kept side.
 pub(crate) trait Summand<T, I>: Send + CoupledBlock {
-    /// Its factor on `segment` of `order`, its vertices in the factored matrix's numbering.
+    /// Its factor on `slots`, its vertices in the factored matrix's numbering.
     fn factor(
         self,
-        segment: Segment,
-        order: &Order,
+        slots: Slots<'_>,
         config: &Config,
         threads: Threads,
         reused: &mut Workspace<T, I>,
@@ -220,15 +221,14 @@ pub(crate) trait Summand<T, I>: Send + CoupledBlock {
 impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
     fn factor(
         self,
-        segment: Segment,
-        order: &Order,
+        slots: Slots<'_>,
         config: &Config,
         threads: Threads,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
         let (congruence, off_diagonal, balance, grounding, grounding_unproven, clamp) =
             self.into_parts();
-        let streams = Streams::of(order.slots(segment).vertex(0), config);
+        let streams = Streams::of(slots.vertex(0), config);
         let tail = |from: usize| congruence.factor_tail(from);
         let draws = streams.cholesky();
         let (elimination, cholesky) = match off_diagonal {
@@ -253,7 +253,6 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             }
         };
         Block {
-            segment,
             congruence,
             elimination,
             cholesky,
@@ -267,8 +266,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
     /// Keyed as a whole block keys its draws.
     fn factor(
         self,
-        segment: Segment,
-        _: &Order,
+        _: Slots<'_>,
         config: &Config,
         threads: Threads,
         reused: &mut Workspace<T, I>,
@@ -280,7 +278,6 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         let tail = congruence.factor_tail(0);
         let cholesky = Cholesky::factor(s, config, streams.cholesky(), tail, reused);
         Block {
-            segment,
             congruence,
             elimination: None,
             cholesky,
@@ -302,7 +299,7 @@ impl<'f, T> Component<'f, T> {
     fn slots(&self) -> Slots<'f> {
         let factor = self.factor;
         on!(&factor.blocks, blocks => match blocks.get(self.k) {
-            Some(block) => factor.order.slots(block.segment),
+            Some(_) => factor.order.slots(self.k),
             None => factor.order.lone(self.k - blocks.len()),
         })
     }
@@ -339,18 +336,9 @@ impl<'f, T: Real> Component<'f, T> {
     }
 }
 
-/// One irreducible block's factor, its local indices stored in `I`, and its vertices as a segment of its [`Order`].
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(bound(
-        serialize = "T: serde::Serialize, I: Index + serde::Serialize",
-        deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>"
-    ))
-)]
+/// One irreducible block's factor, its local indices stored in `I`; its vertices are its set of the [`Order`].
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T, I> {
-    segment: Segment,
     congruence: Box<Congruence<T>>,
     elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,
@@ -365,30 +353,46 @@ impl<T: Real, I: Index> Block<T, I> {
         eliminated + self.cholesky.n_steps()
     }
 
-    /// Slots [`solve_global`](Self::solve_global) takes: room to gather unless the vertices are consecutive, plus the Cholesky's or the elimination's forward, which frees its own first.
-    fn global_scratch_slots(&self) -> usize {
+    /// Slots [`solve_global`](Self::solve_global) takes on its vertices `slots`: room to gather unless they are consecutive, plus the Cholesky's or the elimination's forward, which frees its own first.
+    fn global_scratch_slots(&self, slots: Slots<'_>) -> usize {
         let forward = (self.elimination.as_deref()).map_or(0, BlockElimination::scratch_slots);
-        self.segment.gather_slots() + self.cholesky.scratch_slots().max(forward)
+        slots.gather_slots() + self.cholesky.scratch_slots().max(forward)
     }
 
-    /// Solves the block's vertices of `x`, its segment of `order`, in place through a stack of [`global_scratch_slots`](Self::global_scratch_slots) slots.
-    fn solve_global<V: Batch<T>, X: Rows<V> + ?Sized>(
+    /// Solves its vertices of `x`, set `k` of `order`, in place through a stack of [`global_scratch_slots`](Self::global_scratch_slots) slots.
+    fn solve_global<V: Batch<T>>(
         &self,
         order: &Order,
-        x: &mut X,
+        k: usize,
+        x: &mut [V],
         threads: Threads,
         stack: &mut MemStack,
     ) {
-        order.slots(self.segment).on_local(
+        order.on_local(
+            k,
             x,
             stack,
-            // on_local's two arms would otherwise each call it: ~19 instructions per block.
+            // on_local's arms would otherwise each call it: ~19 instructions per block.
             #[inline(always)]
             |local: &mut [V], rest: &mut MemStack| self.solve_unchecked(local, rest, threads),
         );
     }
 
-    // Both of on_local's arms call it, and rustc's cost model alone keeps those calls.
+    /// [`solve_global`](Self::solve_global) on one thread, on its claim of an `x` blocks solve at once.
+    fn solve_claimed<V: Batch<T>, P: inflight::parallel::ListedIndex>(
+        &self,
+        claim: inflight::parallel::Claim<'_, P, V>,
+        stack: &mut MemStack,
+    ) {
+        on_claimed(
+            claim,
+            stack,
+            #[inline(always)]
+            |local: &mut [V], rest: &mut MemStack| self.solve_unchecked(local, rest, Threads::ONE),
+        );
+    }
+
+    // Each arm of on_claimed calls it, and rustc's cost model alone keeps those calls.
     #[inline(always)]
     fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], stack: &mut MemStack, threads: Threads) {
         let singular = self.cholesky.singular();
@@ -456,33 +460,110 @@ fn splitmix(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// `(Header, (listed, blocks, inverse_pivots))`: the vertices once, each block's segment a run or a length of the order's `listed`.
+/// `(Header, (listed, blocks, inverse_pivots))`: the vertices once, each block's segment, ahead of its parts, a run or a length of the order's `listed`.
 #[cfg(feature = "serde")]
 impl<T: Real + serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let body = (self.order.listed(), &self.blocks, &self.inverse_pivots);
-        wire::serialize::<T, _>(serializer, body)
+        let (listed, segments) = self.order.persisted();
+        let blocks = match &self.blocks {
+            Indexed::U32(blocks) => Indexed::U32(Persisted::all(blocks, &segments)),
+            Indexed::U64(blocks) => Indexed::U64(Persisted::all(blocks, &segments)),
+        };
+        wire::serialize::<T, _>(serializer, (listed, blocks, &self.inverse_pivots))
+    }
+}
+
+/// A block as persisted: its segment ahead of its parts.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize)]
+#[serde(
+    rename = "Block",
+    bound(serialize = "T: serde::Serialize, I: Index + serde::Serialize")
+)]
+struct Persisted<'b, T, I> {
+    segment: Segment,
+    congruence: &'b Congruence<T>,
+    elimination: Option<&'b BlockElimination<T, I>>,
+    cholesky: &'b Cholesky<T, I>,
+    grounding_unproven: bool,
+    clamp: Option<&'b Clamp>,
+}
+
+#[cfg(feature = "serde")]
+impl<'b, T, I> Persisted<'b, T, I> {
+    /// Each of `blocks` on its segment.
+    fn all(blocks: &'b [Block<T, I>], segments: &[Segment]) -> Vec<Self> {
+        (blocks.iter().zip(segments))
+            .map(|(block, &segment)| Self {
+                segment,
+                congruence: &block.congruence,
+                elimination: block.elimination.as_deref(),
+                cholesky: &block.cholesky,
+                grounding_unproven: block.grounding_unproven,
+                clamp: block.clamp.as_deref(),
+            })
+            .collect()
+    }
+}
+
+/// A block as decoded, its segment ahead of its parts.
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+#[serde(
+    rename = "Block",
+    bound(deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>")
+)]
+struct Decoded<T, I> {
+    segment: Segment,
+    congruence: Box<Congruence<T>>,
+    elimination: Option<Box<BlockElimination<T, I>>>,
+    cholesky: Cholesky<T, I>,
+    grounding_unproven: bool,
+    clamp: Option<Box<Clamp>>,
+}
+
+#[cfg(feature = "serde")]
+impl<T, I> Decoded<T, I> {
+    /// The blocks, and each one's segment.
+    fn split(decoded: Vec<Self>) -> (Blocks<T>, Vec<Segment>)
+    where
+        Blocks<T>: From<Box<[Block<T, I>]>>,
+    {
+        let segments = decoded.iter().map(|block| block.segment).collect();
+        let blocks = (decoded.into_iter())
+            .map(|block| Block {
+                congruence: block.congruence,
+                elimination: block.elimination,
+                cholesky: block.cholesky,
+                grounding_unproven: block.grounding_unproven,
+                clamp: block.clamp,
+            })
+            .collect::<Box<[_]>>();
+        (Blocks::from(blocks), segments)
     }
 }
 
 /// `(listed, blocks, inverse_pivots)` as decoded.
 #[cfg(feature = "serde")]
-type Body<T> = (crate::order::Listed, Blocks<T>, Box<[T]>);
+type Body<T> = (
+    crate::order::Listed<Box<[u32]>, Box<[u64]>>,
+    Indexed<Vec<Decoded<T, u32>>, Vec<Decoded<T, u64>>>,
+    Box<[T]>,
+);
 
-/// Checks the order and the blocks' segments before anything sized by their `n`: offsets and vertices in bounds, each block's parts agreeing on its segment's length, so a run's length is one its block's bytes back; only then whether each vertex is in one place.
+/// Checks the blocks against their segments before anything sized by their `n`: each block's parts agreeing on its segment's length, so a run's length is one its block's bytes back; only then whether each vertex is below `n` and in one place.
 #[cfg(feature = "serde")]
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (order, mut blocks, inverse_pivots): Body<T> =
-            wire::deserialize::<T, _, _>(deserializer)?;
-        let order = on!(&mut blocks, blocks => Order::decoded(order, blocks.iter_mut().map(|b| &mut b.segment)));
-        let fits = || on!(&blocks, blocks => blocks.iter().all(Block::holds));
-        let once =
-            |order: &Order| on!(&blocks, blocks => order.once(blocks.iter().map(|b| b.segment)));
+        let (listed, blocks, inverse_pivots): Body<T> = wire::deserialize::<T, _, _>(deserializer)?;
+        let (blocks, segments) = on!(blocks, blocks => Decoded::split(blocks));
+        let fits = on!(&blocks, blocks => (blocks.iter().zip(&segments)).all(|(block, segment)| block.holds(segment.len())));
         let pivots = inverse_pivots.iter().all(|&p| inverse_pivot_in_range(p));
-        let lone = |order: &Order| inverse_pivots.len() <= order.isolated().len();
+        let order = (fits && pivots)
+            .then(|| Order::decoded(listed, &segments))
+            .flatten();
         match order {
-            Some(order) if pivots && lone(&order) && fits() && once(&order) => {
+            Some(order) if inverse_pivots.len() <= order.isolated().len() => {
                 Ok(Self::new(order, blocks, inverse_pivots))
             }
             _ => Err(serde::de::Error::custom("corrupt ApproxInverse")),
@@ -493,8 +574,7 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxI
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> Block<T, I> {
     /// Whether its parts agree on `n` vertices.
-    fn holds(&self) -> bool {
-        let n = self.segment.len();
+    fn holds(&self, n: usize) -> bool {
         let kept = match &self.elimination {
             None => Some(n),
             Some(elimination) => n
@@ -665,13 +745,14 @@ mod storage {
             let Blocks::U32(blocks) = &factor.blocks else {
                 unreachable!("built in u32")
             };
-            for block in blocks.iter() {
-                let len = block.global_scratch_slots();
+            for (k, block) in blocks.iter().enumerate() {
+                let slots = factor.order.slots(k);
+                let len = block.global_scratch_slots(slots);
                 let solve = |fill: f64| {
                     let mut x = b.clone();
                     let mut cells = vec![std::mem::MaybeUninit::new(fill); len];
                     let stack = MemStack::new_any(&mut cells);
-                    block.solve_global(&factor.order, &mut x[..], Threads::All, stack);
+                    block.solve_global(&factor.order, k, &mut x[..], Threads::All, stack);
                     x.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
                 };
                 assert_eq!(solve(0.0), solve(f64::NAN), "{config:?}");
@@ -759,8 +840,8 @@ mod budget {
     use super::*;
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Side};
     use crate::sgdd::{Reduced, ReducedComplement};
-    use crate::threads::{probe, ONE};
     use crate::{widen, CoverSurplus, FrustratedRoute, Sampling, ScalingPolicy, SchurMode};
+    use inflight::parallel::testing as probe;
 
     const THREE: Threads = Threads::Count(NonZeroUsize::new(3).unwrap());
     const SIX: Threads = Threads::Count(NonZeroUsize::new(6).unwrap());
@@ -770,7 +851,7 @@ mod budget {
         let mut x: Vec<_> = (0..factor.n())
             .map(|i| T::from((i % 101) as f64 - 50.0).expect("small"))
             .collect();
-        factor.apply(&mut x, ONE).expect("b has length n");
+        factor.apply(&mut x, Threads::ONE).expect("b has length n");
         let bits = x.into_iter().map(|x| widen(x).to_bits()).collect();
         (format!("{factor:?}"), bits)
     }
@@ -946,14 +1027,6 @@ mod budget {
         }
     }
 
-    fn pool(threads: usize) -> rayon::ThreadPool {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .thread_name(|i| format!("{}-{i}", probe::POOL))
-            .build()
-            .expect("pool")
-    }
-
     /// Under `All`, `Count(1)` and `Count(3)`, in pools of one, two and seven threads, each build equals it under `All` outside any.
     #[rstest]
     fn a_build_is_bit_identical_across_budgets(
@@ -969,7 +1042,7 @@ mod budget {
             let reference = build(Threads::All);
             for pool in &pools {
                 let size = pool.current_num_threads();
-                for budget in [Threads::All, ONE, THREE] {
+                for budget in [Threads::All, Threads::ONE, THREE] {
                     let built = pool.install(|| build(budget));
                     assert!(built == reference, "{case:?}, pool {size}, {budget:?}");
                 }
@@ -977,19 +1050,18 @@ mod budget {
         });
     }
 
-    /// In a pool of seven, a count's build never has more of its threads in a loop's items at once; the pool's whole budget is seen to.
+    /// In pools of seven, a count's build never has more of its threads in a loop's items at once; the pool's whole budget is seen to.
     /// Past three threads only where the machine runs four at once: a 3-vCPU runner caps what any build can show (#519).
     #[test]
     fn a_build_runs_at_most_its_count_of_threads() {
-        let pool = pool(7);
         let mut widest = 0;
         for case in CASES {
             case.each_build(|build| {
-                for (budget, n) in [(ONE, 1), (THREE, 3), (SIX, 6)] {
-                    let peak = probe::peak(|| drop(pool.install(|| build(budget))));
+                for (budget, n) in [(Threads::ONE, 1), (THREE, 3), (SIX, 6)] {
+                    let peak = probe::peak(7, || drop(build(budget)));
                     assert!(peak <= n, "{case:?}: {peak} threads under {budget:?}");
                 }
-                widest = widest.max(probe::peak(|| drop(pool.install(|| build(Threads::All)))));
+                widest = widest.max(probe::peak(7, || drop(build(Threads::All))));
             });
         }
         let cores = std::thread::available_parallelism().map_or(1, usize::from);

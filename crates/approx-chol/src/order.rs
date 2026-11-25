@@ -1,67 +1,47 @@
-//! `P`: every block's vertices of the factored matrix in local order, coupled blocks by their segments, then the isolated ones.
+//! `P`: every block's vertices of the factored matrix in local order, one set per coupled block, then the isolated ones.
 
-use std::ops::{Range, RangeBounds};
+use std::ops::Range;
+
+use inflight::parallel::{Claim, Members, Partition, Set};
 
 use crate::{Index, MemStack};
 
-/// The vertices of `P` a coupled block's [`Segment`] lists, then the isolated vertices: the lone ones, which the factor counts by their pivots, then the dead ones; persisted without what follows from those.
+/// The coupled blocks' vertices, one set each, then the isolated vertices as one more: the lone ones, which the factor counts by their pivots, then the dead ones; no vertex in two sets.
 #[derive(Clone, Debug)]
 pub(crate) struct Order {
-    n: usize,
-    /// The listed segments' vertices in segment order, then the isolated ones from `isolated`.
-    listed: Listed,
-    isolated: usize,
-}
-
-/// A coupled block's vertices: a run of consecutive ones storing no index, or listed in its [`Order`].
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Segment {
-    Run {
-        start: usize,
-        len: usize,
-    },
-    Listed {
-        #[cfg_attr(feature = "serde", serde(skip))]
-        start: usize,
-        len: usize,
-    },
-}
-
-impl Segment {
-    #[cfg(feature = "serde")]
-    pub(crate) fn len(self) -> usize {
-        match self {
-            Segment::Run { len, .. } | Segment::Listed { len, .. } => len,
-        }
-    }
-
-    /// Starts it at `end` of the list if it is listed; where the next listed one starts.
-    fn place(&mut self, end: usize) -> usize {
-        match self {
-            Segment::Run { .. } => end,
-            Segment::Listed { start, len } => {
-                *start = end;
-                end + *len
-            }
-        }
-    }
-
-    /// Slots [`Slots::on_local`] takes from its stack before passing the rest on: room to gather, none for a run.
-    pub(crate) fn gather_slots(self) -> usize {
-        match self {
-            Segment::Run { .. } => 0,
-            Segment::Listed { len, .. } => len,
-        }
-    }
+    pub(crate) sets: Sets,
 }
 
 /// In `u32` when `n` lets every vertex fit.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
-pub(crate) enum Listed {
-    U32(Box<[u32]>),
-    U64(Box<[u64]>),
+pub(crate) enum Sets {
+    U32(Partition<u32>),
+    U64(Partition<u64>),
+}
+
+/// A coupled block's vertices as persisted: a run of consecutive ones storing no index, or the next `len` of the order's list.
+#[cfg(feature = "serde")]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) enum Segment {
+    Run { start: usize, len: usize },
+    Listed { len: usize },
+}
+
+#[cfg(feature = "serde")]
+impl Segment {
+    pub(crate) fn len(self) -> usize {
+        match self {
+            Segment::Run { len, .. } | Segment::Listed { len } => len,
+        }
+    }
+}
+
+/// The listed vertices as persisted.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) enum Listed<U, W> {
+    U32(U),
+    U64(W),
 }
 
 /// One block's vertices of the factored matrix, in local order.
@@ -72,116 +52,154 @@ pub(crate) enum Slots<'a> {
     U64(&'a [u64]),
 }
 
-impl From<Box<[u32]>> for Listed {
-    fn from(listed: Box<[u32]>) -> Self {
-        Self::U32(listed)
+/// Why packing cannot fail: the ranges are disjoint, of distinct vertices renumbered below `n`.
+const DISJOINT: &str = "disjoint ranges of distinct vertices below n";
+
+impl From<Partition<u32>> for Sets {
+    fn from(sets: Partition<u32>) -> Self {
+        Self::U32(sets)
     }
 }
 
-impl From<Box<[u64]>> for Listed {
-    fn from(listed: Box<[u64]>) -> Self {
-        Self::U64(listed)
+impl From<Partition<u64>> for Sets {
+    fn from(sets: Partition<u64>) -> Self {
+        Self::U64(sets)
     }
 }
 
 impl Order {
-    /// The ranges `coupled` of `vertices`, ascending and disjoint, as the coupled blocks' segments, consecutive ones as runs; then the isolated vertices from the last range's end on; every vertex renumbered from `numbering`'s start, whose length is `n`, and moved in place unless that narrows it to `u32`.
+    /// The ranges `coupled` of `vertices`, ascending and disjoint, as the coupled blocks' sets, consecutive ones as runs; then the isolated vertices from the last range's end on; every vertex renumbered from `numbering`'s start, whose length is `n`, and moved in place unless that narrows it to `u32`.
     pub(crate) fn pack<I: Index>(
         mut vertices: Vec<I>,
         coupled: impl ExactSizeIterator<Item = Range<usize>> + Clone,
         numbering: Range<usize>,
-    ) -> (Self, Vec<Segment>)
+    ) -> Self
     where
-        Listed: From<Box<[I]>>,
+        Sets: From<Partition<I>>,
     {
         let local = |v: I| v.index() - numbering.start;
-        let (mut segments, mut end) = (Vec::with_capacity(coupled.len()), 0);
+        let mut sets = Vec::with_capacity(coupled.len() + 1);
         let mut isolated = 0;
         for range in coupled.clone() {
             isolated = range.end;
-            let (block, len) = (&vertices[range.clone()], range.len());
-            let mut segment = match block.windows(2).all(|w| w[1].index() == w[0].index() + 1) {
-                true => Segment::Run {
-                    start: local(block[0]),
-                    len,
+            let block = &vertices[range.clone()];
+            sets.push(
+                match block.windows(2).all(|w| w[1].index() == w[0].index() + 1) {
+                    true => Set::Run {
+                        start: local(block[0]),
+                        len: range.len(),
+                    },
+                    false => Set::Listed { len: range.len() },
                 },
-                false => Segment::Listed { start: 0, len },
-            };
-            end = segment.place(end);
-            segments.push(segment);
+            );
         }
-        let listed = (coupled.zip(&segments))
-            .filter(|(_, segment)| matches!(segment, Segment::Listed { .. }))
+        sets.push(Set::Listed {
+            len: vertices.len() - isolated,
+        });
+        let listed = (coupled.zip(&sets))
+            .filter(|(_, set)| matches!(set, Set::Listed { .. }))
             .flat_map(|(range, _)| range)
             .chain(isolated..vertices.len());
-        let (len, n) = (end + vertices.len() - isolated, numbering.len());
-        let listed = match size_of::<I>() > size_of::<u32>() && n as u64 <= 1 << 32 {
+        let len = (sets.iter())
+            .map(|set| match set {
+                Set::Listed { len } => *len,
+                Set::Run { .. } => 0,
+            })
+            .sum();
+        let n = numbering.len();
+        let sets = match size_of::<I>() > size_of::<u32>() && n as u64 <= 1 << 32 {
             true => {
                 let mut narrow = Vec::with_capacity(len);
                 narrow.extend(listed.map(|k| local(vertices[k]) as u32));
-                Listed::U32(narrow.into_boxed_slice())
+                Sets::U32(Partition::new(n, narrow.into_boxed_slice(), sets).expect(DISJOINT))
             }
             false => {
                 for (to, k) in listed.enumerate() {
                     vertices[to] = I::from_index(local(vertices[k]));
                 }
                 vertices.truncate(len);
-                Listed::from(vertices.into_boxed_slice())
+                Sets::from(Partition::new(n, vertices.into_boxed_slice(), sets).expect(DISJOINT))
             }
         };
-        let order = Self {
-            n,
-            listed,
-            isolated: end,
-        };
-        (order, segments)
+        Self { sets }
     }
 
-    /// From `listed` and the coupled blocks' `segments`, whose list offsets it rebuilds, with `n`; `None` unless every offset is in bounds and every vertex below `n`, allocating nothing `n` sizes.
+    /// From `listed` and the coupled blocks' `segments`, with `n` their vertices and the isolated ones, the rest of `listed`; `None` unless every vertex is below `n` and in one set.
     #[cfg(feature = "serde")]
-    pub(crate) fn decoded<'s>(
-        listed: Listed,
-        segments: impl Iterator<Item = &'s mut Segment>,
+    pub(crate) fn decoded(
+        listed: Listed<Box<[u32]>, Box<[u64]>>,
+        segments: &[Segment],
     ) -> Option<Self> {
-        let (mut end, mut covered, mut runs_end) = (0usize, 0usize, 0usize);
-        for segment in segments {
-            if let Segment::Run { start, len } = *segment {
-                runs_end = runs_end.max(start.checked_add(len)?);
-            }
+        let (mut covered, mut in_list) = (0usize, 0usize);
+        for &segment in segments {
             covered = covered.checked_add(segment.len())?;
-            // Placing cannot overflow: the list's end stays within `covered`.
-            end = segment.place(end);
+            if let Segment::Listed { len } = segment {
+                in_list = in_list.checked_add(len)?;
+            }
         }
-        let isolated = listed.slots(..).len().checked_sub(end)?;
+        let listed_len = match &listed {
+            Listed::U32(listed) => listed.len(),
+            Listed::U64(listed) => listed.len(),
+        };
+        let isolated = listed_len.checked_sub(in_list)?;
         let n = covered.checked_add(isolated)?;
-        let below = match &listed {
-            Listed::U32(listed) => listed.iter().all(|&v| v.index() < n),
-            Listed::U64(listed) => listed.iter().all(|&v| v < n as u64),
+        let sets = (segments.iter())
+            .map(|&segment| match segment {
+                Segment::Run { start, len } => Set::Run { start, len },
+                Segment::Listed { len } => Set::Listed { len },
+            })
+            .chain([Set::Listed { len: isolated }]);
+        let sets = match listed {
+            Listed::U32(listed) => Sets::U32(Partition::new(n, listed, sets).ok()?),
+            Listed::U64(listed) => Sets::U64(Partition::new(n, listed, sets).ok()?),
         };
-        let order = Self {
-            n,
-            listed,
-            isolated: end,
-        };
-        (runs_end <= n && below).then_some(order)
+        Some(Self { sets })
     }
 
-    /// What persists of it: all else follows from the blocks' segments and the lone vertices' count.
+    /// What persists of it: the listed vertices, and each coupled block's segment.
     #[cfg(feature = "serde")]
-    pub(crate) fn listed(&self) -> &Listed {
-        &self.listed
+    pub(crate) fn persisted(&self) -> (Listed<&[u32], &[u64]>, Vec<Segment>) {
+        let (listed, sets) = match &self.sets {
+            Sets::U32(sets) => (Listed::U32(sets.listed()), sets.len()),
+            Sets::U64(sets) => (Listed::U64(sets.listed()), sets.len()),
+        };
+        // The isolated vertices' set, the last, follows from the list's length.
+        let segments = (0..sets - 1)
+            .map(|k| match self.slots(k) {
+                Slots::Run { start, len } => Segment::Run { start, len },
+                listed => Segment::Listed { len: listed.len() },
+            })
+            .collect();
+        (listed, segments)
     }
 
     /// The vertices in a block or dead.
     pub(crate) fn n(&self) -> usize {
-        self.n
+        match &self.sets {
+            Sets::U32(sets) => sets.n(),
+            Sets::U64(sets) => sets.n(),
+        }
     }
 
-    /// A coupled block's vertices, by its segment.
-    pub(crate) fn slots(&self, segment: Segment) -> Slots<'_> {
-        match segment {
-            Segment::Run { start, len } => Slots::Run { start, len },
-            Segment::Listed { start, len } => self.listed.slots(start..start + len),
+    /// Coupled block `k`'s vertices; the isolated ones past the last.
+    pub(crate) fn slots(&self, k: usize) -> Slots<'_> {
+        match &self.sets {
+            Sets::U32(sets) => Slots::of(sets.members(k), Slots::U32),
+            Sets::U64(sets) => Slots::of(sets.members(k), Slots::U64),
+        }
+    }
+
+    /// [`on_claimed`] on coupled block `k`'s vertices of `x`.
+    pub(crate) fn on_local<V: Copy>(
+        &self,
+        k: usize,
+        x: &mut [V],
+        stack: &mut MemStack,
+        solve: impl FnOnce(&mut [V], &mut MemStack),
+    ) {
+        match &self.sets {
+            Sets::U32(sets) => on_claimed(sets.claim(x, k), stack, solve),
+            Sets::U64(sets) => on_claimed(sets.claim(x, k), stack, solve),
         }
     }
 
@@ -193,39 +211,45 @@ impl Order {
 
     /// Vertices no entry couples: the lone ones, each its own block, then the dead ones, in no block.
     pub(crate) fn isolated(&self) -> Slots<'_> {
-        self.listed.slots(self.isolated..)
+        let last = match &self.sets {
+            Sets::U32(sets) => sets.len(),
+            Sets::U64(sets) => sets.len(),
+        };
+        self.slots(last - 1)
     }
 
     /// The first `lone` isolated vertices, and the dead ones after them.
     pub(crate) fn lone_and_dead(&self, lone: usize) -> (Slots<'_>, Slots<'_>) {
-        let dead = self.isolated + lone;
-        (
-            self.listed.slots(self.isolated..dead),
-            self.listed.slots(dead..),
-        )
-    }
-
-    /// Whether no vertex is in two places, the coupled blocks' on `segments`; with every one below `n` and `n` places, each is in one.
-    #[cfg(feature = "serde")]
-    pub(crate) fn once(&self, mut segments: impl Iterator<Item = Segment>) -> bool {
-        let mut seen = vec![false; self.n];
-        let mut once = |v: usize| !std::mem::replace(&mut seen[v], true);
-        segments.all(|segment| self.slots(segment).vertices().all(&mut once))
-            && self.isolated().vertices().all(once)
-    }
-}
-
-impl Listed {
-    fn slots(&self, range: impl RangeBounds<usize>) -> Slots<'_> {
-        let range = (range.start_bound().cloned(), range.end_bound().cloned());
-        match self {
-            Self::U32(listed) => Slots::U32(&listed[range]),
-            Self::U64(listed) => Slots::U64(&listed[range]),
+        match self.isolated() {
+            Slots::Run { start, len } => (
+                Slots::Run { start, len: lone },
+                Slots::Run {
+                    start: start + lone,
+                    len: len - lone,
+                },
+            ),
+            Slots::U32(isolated) => (Slots::U32(&isolated[..lone]), Slots::U32(&isolated[lone..])),
+            Slots::U64(isolated) => (Slots::U64(&isolated[..lone]), Slots::U64(&isolated[lone..])),
         }
     }
 }
 
 impl<'a> Slots<'a> {
+    fn of<I>(members: Members<'a, I>, listed: impl FnOnce(&'a [I]) -> Self) -> Self {
+        match members {
+            Members::Run { start, len } => Slots::Run { start, len },
+            Members::Listed(members) => listed(members),
+        }
+    }
+
+    /// Slots [`on_local`](Self::on_local) takes from its stack before passing the rest on: room to gather, none for a run.
+    pub(crate) fn gather_slots(self) -> usize {
+        match self {
+            Slots::Run { .. } => 0,
+            listed => listed.len(),
+        }
+    }
+
     pub(crate) fn len(self) -> usize {
         match self {
             Slots::Run { len, .. } => len,
@@ -247,52 +271,22 @@ impl<'a> Slots<'a> {
     pub(crate) fn vertices(self) -> impl ExactSizeIterator<Item = usize> + Clone + 'a {
         (0..self.len()).map(move |k| self.vertex(k))
     }
-
-    /// Runs `solve` on `Pᵀ x` and the rest of `stack`, then sets the block's vertices of `x` to the result.
-    pub(crate) fn on_local<V: Copy, X: Rows<V> + ?Sized>(
-        self,
-        x: &mut X,
-        stack: &mut MemStack,
-        solve: impl FnOnce(&mut [V], &mut MemStack),
-    ) {
-        match self {
-            Slots::Run { start, len } => solve(x.run(start, len), stack),
-            Slots::U32(listed) => gathered(listed, x, stack, solve),
-            Slots::U64(listed) => gathered(listed, x, stack, solve),
-        }
-    }
 }
 
-/// The rows of `x` a block's [`Slots::on_local`] reads and writes: all of `x`, or one block's share of an `x` blocks solve at once.
-pub(crate) trait Rows<V> {
-    fn run(&mut self, start: usize, len: usize) -> &mut [V];
-    fn get(&self, row: usize) -> V;
-    fn set(&mut self, row: usize, value: V);
-}
-
-impl<V: Copy> Rows<V> for [V] {
-    fn run(&mut self, start: usize, len: usize) -> &mut [V] {
-        &mut self[start..start + len]
-    }
-
-    fn get(&self, row: usize) -> V {
-        self[row]
-    }
-
-    fn set(&mut self, row: usize, value: V) {
-        self[row] = value;
-    }
-}
-
-fn gathered<V: Copy, I: Index, X: Rows<V> + ?Sized>(
-    listed: &[I],
-    x: &mut X,
+/// Runs `solve` on a block's claim of `x`, `Pᵀ x` gathered unless its vertices are consecutive, and the rest of `stack`, then sets its vertices of `x` to the result.
+pub(crate) fn on_claimed<V: Copy, P: inflight::parallel::ListedIndex>(
+    claim: Claim<'_, P, V>,
     stack: &mut MemStack,
     solve: impl FnOnce(&mut [V], &mut MemStack),
 ) {
-    let (mut local, rest) = stack.make_with(listed.len(), |k| x.get(listed[k].index()));
-    solve(&mut local, rest);
-    (local.iter().zip(listed)).for_each(|(&v, &i)| x.set(i.index(), v));
+    match claim {
+        Claim::Run(x) => solve(x, stack),
+        Claim::Scattered(mut x) => {
+            let (mut local, rest) = stack.make_with(x.len(), |k| x.get(k));
+            solve(&mut local, rest);
+            local.iter().enumerate().for_each(|(k, &v)| x.set(k, v));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -311,9 +305,9 @@ mod tests {
     #[test]
     fn packing_lists_coupled_blocks_ahead_of_isolated_vertices() {
         let vertices = vec![0u32, 2, 4, 5, 3, 6, 7, 1, 8];
-        let (order, segments) = Order::pack(vertices, [0..2, 2..5, 5..7].into_iter(), 0..9);
+        let order = Order::pack(vertices, [0..2, 2..5, 5..7].into_iter(), 0..9);
         assert_eq!(order.n(), 9);
-        let coupled = segments.into_iter().map(|segment| order.slots(segment));
+        let coupled = (0..3).map(|k| order.slots(k));
         let blocks: Vec<_> = coupled.chain([order.lone(0)]).collect();
         assert!(!is_run(blocks[0]) && !is_run(blocks[1]) && is_run(blocks[2]) && is_run(blocks[3]));
         let blocks: Vec<_> = blocks.into_iter().map(listed).collect();
@@ -325,9 +319,9 @@ mod tests {
     #[test]
     fn packing_renumbers_onto_a_kept_side() {
         let vertices = vec![0u32, 4, 6, 1, 5, 8, 7];
-        let (order, segments) = Order::pack(vertices, [1..3, 4..5].into_iter(), 4..9);
+        let order = Order::pack(vertices, [1..3, 4..5].into_iter(), 4..9);
         assert_eq!(order.n(), 5);
-        let coupled = segments.into_iter().map(|segment| order.slots(segment));
+        let coupled = (0..2).map(|k| order.slots(k));
         let blocks: Vec<_> = coupled.chain([order.lone(0)]).collect();
         assert!(!is_run(blocks[0]) && is_run(blocks[1]));
         let blocks: Vec<_> = blocks.into_iter().map(listed).collect();

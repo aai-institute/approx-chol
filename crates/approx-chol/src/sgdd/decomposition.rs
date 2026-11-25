@@ -9,13 +9,13 @@ mod partition;
 use super::block::CoupledBlock;
 use super::forest::Forest;
 use crate::input::Canonical;
-use crate::order::{Listed, Order, Segment};
+use crate::order::{Order, Sets};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
-use crate::threads::Split;
 use crate::{BuildError, Index, Real, Threads};
 pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
 };
+use inflight::parallel::Schedule;
 use partition::Partition;
 
 /// An assembled `A` and its connected components, found from the same cells.
@@ -206,7 +206,7 @@ impl<A, I: Index> Cuts<A, I> {
             <A as PrincipalBlocks<T, I>>::Block,
             Threads,
         ) -> Result<B, BuildError>,
-        many: impl FnOnce(Assembly<'p, A, I, T>, &Split) -> Vec<Result<B, BuildError>>,
+        many: impl FnOnce(Assembly<'p, A, I, T>, &Schedule) -> Vec<Result<B, BuildError>>,
     ) -> Result<Cut<'p, I, T, B>, BuildError>
     where
         A: PrincipalBlocks<T, I>,
@@ -220,7 +220,7 @@ impl<A, I: Index> Cuts<A, I> {
             }
             (count, Some(position)) => {
                 let work = components.coupled.iter().map(|c| c.len() as u64).sum();
-                let split = threads.split(count, crate::threads::grain(count, work, PARALLEL_BITS));
+                let split = threads.schedule(crate::grain(count, work, PARALLEL_BITS));
                 let assembly = Assembly {
                     a,
                     position,
@@ -351,11 +351,10 @@ impl<I, T, C> Components<I, T, C> {
     }
 }
 
-/// The factored matrix's summands, its vertices packed: each coupled block on its segment of `order`, in component order, then each lone vertex's pivot.
+/// The factored matrix's summands, its vertices packed: each coupled block on its set of `order`, in component order, then each lone vertex's pivot.
 #[derive(Clone, Debug)]
 pub(crate) struct Packed<B, T> {
     pub(crate) order: Order,
-    pub(crate) segments: Vec<Segment>,
     pub(crate) coupled: Vec<B>,
     pub(crate) pivots: Vec<T>,
 }
@@ -364,7 +363,7 @@ impl<I: Index, T, B: CoupledBlock> Summands<B, I, T> {
     /// Its vertices packed into the factor's order, the one form a factor or a reader of its blocks' vertices takes.
     pub(crate) fn pack(self) -> Packed<B, T>
     where
-        Listed: From<Box<[I]>>,
+        Sets: From<inflight::parallel::Partition<I>>,
     {
         let Self {
             vertices,
@@ -372,10 +371,9 @@ impl<I: Index, T, B: CoupledBlock> Summands<B, I, T> {
             pivots,
             numbering,
         } = self;
-        let (order, segments) = Order::pack(vertices, ranges(&coupled), numbering);
+        let order = Order::pack(vertices, ranges(&coupled), numbering);
         Packed {
             order,
-            segments,
             coupled,
             pivots,
         }
@@ -392,7 +390,8 @@ impl<I: Index, T, B: CoupledBlock> Summands<B, I, T> {
     {
         let kept: Vec<_> = ranges(&self.coupled).collect();
         let (blocks, vertices) = (std::mem::take(&mut self.coupled), &self.vertices);
-        let coupled = (threads.split(blocks.len(), 1))
+        let coupled = threads
+            .schedule(1)
             .map(blocks, |k, block, _| f(&vertices[kept[k].clone()], block));
         self.with_coupled(coupled)
     }

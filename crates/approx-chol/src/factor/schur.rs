@@ -176,7 +176,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         SddRows::split(
             route,
             c.n_cols(),
-            crate::threads::grain(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
+            crate::grain(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
             threads,
             ground,
             |mut sums, k| {
@@ -297,7 +297,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let n = self.layout.rows(c.n_cols());
         let shift = bucket_shift(n);
         let count = n.div_ceil(1 << shift);
-        let per_task = crate::threads::grain(c.n_rows(), c.nnz() as u64, 14);
+        let per_task = crate::grain(c.n_rows(), c.nnz() as u64, 14);
         let stars = self.layout.rows(c.n_rows());
         let piece = |task: usize| {
             let (mut sampler, mut buckets) =
@@ -311,7 +311,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
             buckets
         };
         let tasks = stars.div_ceil(per_task);
-        threads.split(tasks, 1).map(0..tasks, |k, _, _| piece(k))
+        threads.schedule(1).map(0..tasks, |k, _, _| piece(k))
     }
 }
 
@@ -391,7 +391,6 @@ mod tests {
 
     use super::*;
     use crate::factor::config::{CoverSurplus, FrustratedRoute, Sampling};
-    use crate::threads::ONE;
 
     /// Kept `0` and `1` joined through eliminated `e₀` by `c = (−a₀, −b₀)` and `e₁` by `(a₁, −b₁)`, kept surplus `s`: two degree-two stars of opposite sign onto one pair.
     fn opposed([a0, b0, a1, b1]: [f64; 4], s: [f64; 2]) -> (Rows<f64, u32>, Grounding<f64>) {
@@ -434,7 +433,7 @@ mod tests {
                 };
                 let (cross, grounding) = opposed(weights, s);
                 let block = BipartiteBlock::of(cross, Balance::Frustrated, grounding);
-                let m = block.complement(&config, Streams::of(0, &config), ONE);
+                let m = block.complement(&config, Streams::of(0, &config), Threads::ONE);
                 let signed = m.layout() == Layout::Signed;
                 assert!(signed, "a frustrated complement is signed under Signed");
                 let mut got = [0.0; 3];
@@ -504,7 +503,7 @@ mod tests {
             let grounds = |complement| {
                 let config = config(complement);
                 let block = grounded_stars::<T>(balanced);
-                ground_bits(block.complement(&config, Streams::of(0, &config), ONE))
+                ground_bits(block.complement(&config, Streams::of(0, &config), Threads::ONE))
             };
             let exact = grounds(SchurMode::Exact);
             assert_eq!(exact.len(), if balanced { 3 } else { 6 }, "{exact:?}");
@@ -545,7 +544,7 @@ mod tests {
             let ground = stars.grounding.surplus().expect("a ground");
             let grounding = Grounding::of(ground.iter().map(|s| s * scale).collect());
             let block = BipartiteBlock::of(stars.cross, stars.balance, grounding);
-            let m = block.complement(&config, Streams::of(0, &config), ONE);
+            let m = block.complement(&config, Streams::of(0, &config), Threads::ONE);
             assert_eq!(m.layout(), Layout::Cover, "a cover is an SDDM");
             let mut edges = Vec::new();
             m.grounded_edges(|i, j, w: f64| edges.push((i, j, w.to_bits())));

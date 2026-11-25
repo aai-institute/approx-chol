@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use rayon::prelude::*;
+use inflight::parallel::Chunks;
 
 use super::{within_one, MULTIPLY_ADD_GRAIN_BITS};
 use crate::storage::Rows;
@@ -100,16 +100,11 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let n_leaves = bounds.len() - 1;
         let (mut partial, _) = stack.make_with(slots, |_| V::zero());
         let leaf = |l: usize, sums: &mut [V]| scatter(bounds[l]..bounds[l + 1], sums);
-        match threads.per_task(n_leaves, 1) {
-            Some(per) => {
-                (partial.par_chunks_mut(per * n_kept).enumerate()).for_each(|(task, sums)| {
-                    (task * per..)
-                        .zip(sums.chunks_mut(n_kept))
-                        .for_each(|(l, s)| leaf(l, s));
-                })
-            }
-            None => (partial.chunks_mut(n_kept).enumerate()).for_each(|(l, s)| leaf(l, s)),
-        }
+        threads.for_each_chunk(Chunks::equal(&mut partial, n_leaves), 1, |first, sums| {
+            (first..)
+                .zip(sums.into_values().chunks_mut(n_kept))
+                .for_each(|(l, s)| leaf(l, s));
+        });
         let add = |first: usize, b_ks: &mut [V]| {
             for sums in partial.chunks(n_kept) {
                 for (b_k, &s) in b_ks.iter_mut().zip(&sums[first..]) {
@@ -117,11 +112,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 }
             }
         };
-        match threads.per_task(n_kept, (1 << LEAF_BITS) / n_leaves + 1) {
-            Some(per) => (kept.par_chunks_mut(per).enumerate())
-                .for_each(|(task, b_ks)| add(task * per, b_ks)),
-            None => add(0, kept),
-        }
+        threads.for_each_chunk(kept, (1 << LEAF_BITS) / n_leaves + 1, add);
     }
 
     /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split as [`Threads::per_task`] says past one grain of multiply-adds.
@@ -142,11 +133,9 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let len = eliminated.len();
         // A fixed grain, as TBB's simple partitioner: concurrent blocks share the pool; a short block still splits 16 ways.
         let grain = ROWS_PER_TASK.min(len.div_ceil(16));
-        if let (true, Some(per)) = (splits(c), threads.per_task(len, grain)) {
-            (eliminated.par_chunks_mut(per).enumerate())
-                .for_each(|(task, ys)| rows(task * per, ys));
-        } else {
-            rows(0, eliminated);
+        match splits(c) {
+            true => threads.for_each_chunk(eliminated, grain, rows),
+            false => rows(0, eliminated),
         }
     }
 }
@@ -310,7 +299,7 @@ mod tests {
             }
         }
         let alone = workers(1, || {
-            elimination.solve(&mut x, crate::threads::ONE, stack, |_, _| ())
+            elimination.solve(&mut x, Threads::ONE, stack, |_, _| ())
         });
         assert_eq!(
             alone,

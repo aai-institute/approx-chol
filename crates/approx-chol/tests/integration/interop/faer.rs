@@ -148,17 +148,6 @@ fn faer_try_from_non_square_returns_error() {
     assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
 }
 
-#[test]
-fn a_faer_par_is_a_thread_budget() {
-    assert_eq!(Threads::from(Par::Seq), Threads::Count(NonZeroUsize::MIN));
-    for n in [1, 3, 12] {
-        let count = NonZeroUsize::new(n).unwrap();
-        assert_eq!(Threads::from(Par::Rayon(count)), Threads::Count(count));
-    }
-    let pool = NonZeroUsize::new(rayon::current_num_threads()).unwrap();
-    assert_eq!(Threads::from(Par::rayon(0)), Threads::Count(pool));
-}
-
 /// A grounded grid's approximate inverse and its column `j` of right-hand sides.
 fn grid_inverse() -> (ApproxInverse<f64>, impl Fn(usize) -> Vec<f64>) {
     let graph = grounded_grid(9, 7);
@@ -360,14 +349,15 @@ const IN_PLACE: [(&str, InPlace, Scratch); 4] = [
 fn faer_operator_methods_equal_apply() {
     let (factor, column) = grid_inverse();
     let n = factor.n();
-    for par in [Par::Seq, Par::rayon(3)] {
+    let three = Threads::Count(NonZeroUsize::new(3).unwrap());
+    for (par, threads) in [(Par::Seq, Threads::ONE), (Par::rayon(3), three)] {
         for k in [1, 5, 9] {
             let columns: Vec<Vec<f64>> = (0..k).map(&column).collect();
             let rhs = Mat::from_fn(n, k, |i, j| columns[j][i]);
             let mut expected = rhs.clone();
-            factor.apply(&mut expected, par.into()).expect("n rows");
+            factor.apply(&mut expected, threads).expect("n rows");
             let expected = column_bits(expected.as_ref());
-            let own = factor.scratch(k, par.into());
+            let own = factor.scratch(k, threads);
             for (name, _, scratch) in APPLIES.iter().copied() {
                 assert_eq!(scratch(&factor, k, par), own, "{name}'s scratch");
             }

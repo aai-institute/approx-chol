@@ -6,8 +6,8 @@ use super::config::{Config, CoverSurplus, FrustratedRoute};
 use super::sign::cancel;
 use crate::sgdd::{Balance, FactorTail, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
-use crate::threads::{task, ONE};
 use crate::{narrow, widen, Batch, Index, Real, Threads};
+use inflight::parallel::instrument_task;
 
 /// An SDD matrix, a signed graph's Laplacian plus a surplus: `M` itself, its off-diagonal nonpositive or of either sign, or `M`'s Gremban cover on two interleaved sheets, each vertex's copies sharing its surplus.
 pub(super) struct Sdd<T, I> {
@@ -52,7 +52,7 @@ impl<T: Real, I: Index> Sdd<T, I> {
             Layout::Cover => {
                 // The cover acts as `M` on `[z; −z]`.
                 let (n, ground) = (off_diagonal.n(), surplus.surplus().map(<[T]>::to_vec));
-                let rows = SddRows::split(route, n, n, ONE, ground, |mut sums, i| {
+                let rows = SddRows::split(route, n, n, Threads::ONE, ground, |mut sums, i| {
                     for (j, &a) in off_diagonal.upper(i) {
                         sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
                     }
@@ -304,10 +304,10 @@ impl<T: Real, I: Index> SddRows<T, I> {
         let rows = match threads.per_task(n, min_len) {
             None => (0..n).fold(RowSums::new(columns), add),
             Some(per) => {
-                let rows = (0..n)
-                    .into_par_iter()
-                    .with_min_len(per)
-                    .fold(|| RowSums::new(columns), |rows, k| task(|| add(rows, k)));
+                let rows = (0..n).into_par_iter().with_min_len(per).fold(
+                    || RowSums::new(columns),
+                    |rows, k| instrument_task(|| add(rows, k)),
+                );
                 let rows = rows.reduce_with(|mut rows, part| {
                     let offset = rows.indices.len();
                     rows.ptrs.extend(part.ptrs[1..].iter().map(|&p| p + offset));

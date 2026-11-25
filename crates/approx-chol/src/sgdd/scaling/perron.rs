@@ -446,7 +446,7 @@ mod tests {
         y: &[f64],
         (tolerance, band): (f64, f64),
     ) -> Bracket {
-        let normalized = Normalized::new(off_diagonal, degree, crate::threads::ONE);
+        let normalized = Normalized::new(off_diagonal, degree, crate::Threads::ONE);
         let mut work = vec![0.0; y.len()];
         let open = (tolerance, band, f64::NEG_INFINITY);
         Bracket::of(&normalized, y, &mut work, rows, open).expect("positive")

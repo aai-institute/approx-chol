@@ -149,11 +149,11 @@ pub struct Clamped<'s> {
 }
 
 impl<'s> Clamped<'s> {
-    /// Each clamped block of `packed` on its segment of the order.
+    /// Each clamped block of `packed` on its set of the order.
     fn of<B: CoupledBlock, T>(packed: &'s Packed<B, T>) -> impl Iterator<Item = Self> {
-        (packed.coupled.iter().zip(&packed.segments)).filter_map(|(block, &segment)| {
+        (packed.coupled.iter().enumerate()).filter_map(|(k, block)| {
             Some(Self {
-                slots: packed.order.slots(segment),
+                slots: packed.order.slots(k),
                 clamp: block.clamp()?,
             })
         })
