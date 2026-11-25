@@ -65,6 +65,7 @@ pub use factor::{
     ColumnMajor, Columns, Complement, Component, Config, CoverSurplus, FrustratedRoute, Header,
     HeaderMismatch, LayoutError, MatrixMut, Sampling, Scalar, SchurMode, Sgdd,
 };
+use inflight::parallel::Blocks;
 pub use inflight::parallel::Threads;
 pub use sgdd::{Clamp, ScalingOutcome, ScalingPolicy};
 
@@ -210,9 +211,10 @@ fn chunked_sum<X: Copy + Sync, W: Batch<f64>>(
         return compensated_sum(x, term);
     }
     let threads = pass_threads(x.len() * W::LANES, threads);
-    let leaf = |start: usize, x: &[X]| Sum2::of(x, |i, x| term(start + i, x));
+    let leaf = |(start, x): (usize, &[X])| Sum2::of(x, |i, x| term(start + i, x));
     let merge = |left: Sum2<W>, right| left.merge(right);
-    threads.fold_tree(x, SUM_CHUNK, leaf, merge).total()
+    let blocks = Blocks::new(x, SUM_CHUNK);
+    threads.fold_tree(blocks, leaf, merge).total()
 }
 
 /// Ogita–Rump–Oishi Sum2 (SISC 26(6), 2005) in eight fixed TwoSum lanes: off by at most `ε|Σx| + (nε)² Σ|x|`.
