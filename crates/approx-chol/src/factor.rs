@@ -25,8 +25,8 @@ use crate::order::Segment;
 use crate::order::{on_claimed, Order, Slots};
 use crate::sgdd::{BlockComplement, Congruence, CoupledBlock, IrreducibleBlock, Packed};
 use crate::storage::OffDiagonal;
-use crate::Clamp;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
+use crate::{Clamp, Indexed};
 pub(crate) use apply::Kernel;
 #[cfg(any(feature = "faer", feature = "ndarray"))]
 pub(crate) use apply::Slices;
@@ -49,18 +49,6 @@ pub struct ApproxInverse<T = f64> {
     coupled: Coupled,
 }
 
-/// A value in the narrowest index a cover's `2n + 1` slots fit.
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(rename = "Blocks")
-)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Indexed<N, W> {
-    U32(N),
-    U64(W),
-}
-
 /// Every coupled block's factor, block `k` on `order`'s set `k`.
 pub(crate) type Blocks<T> = Indexed<Box<[Block<T, u32>]>, Box<[Block<T, u64>]>>;
 
@@ -76,17 +64,6 @@ impl<T> From<Box<[Block<T, u64>]>> for Blocks<T> {
     }
 }
 
-/// Runs `$body` on the value, whichever index type stores it.
-macro_rules! on {
-    ($blocks:expr, $each:ident => $body:expr) => {
-        match $blocks {
-            Indexed::U32($each) => $body,
-            Indexed::U64($each) => $body,
-        }
-    };
-}
-
-// Below `on!`: a macro_rules macro is visible only to modules declared after it.
 mod build;
 mod spread;
 use spread::{Coupled, Room};
@@ -297,11 +274,11 @@ pub struct Component<'f, T = f64> {
 
 impl<'f, T> Component<'f, T> {
     fn slots(&self) -> Slots<'f> {
-        let factor = self.factor;
-        on!(&factor.blocks, blocks => match blocks.get(self.k) {
-            Some(_) => factor.order.slots(self.k),
-            None => factor.order.lone(self.k - blocks.len()),
-        })
+        let (order, coupled) = (&self.factor.order, on!(&self.factor.blocks, b => b.len()));
+        match self.k.checked_sub(coupled) {
+            None => order.slots(self.k),
+            Some(lone) => order.lone(lone),
+        }
     }
 }
 
@@ -368,27 +345,22 @@ impl<T: Real, I: Index> Block<T, I> {
         threads: Threads,
         stack: &mut MemStack,
     ) {
-        order.on_local(
-            k,
-            x,
-            stack,
-            // on_local's arms would otherwise each call it: ~19 instructions per block.
-            #[inline(always)]
-            |local: &mut [V], rest: &mut MemStack| self.solve_unchecked(local, rest, threads),
-        );
+        on!(&order.sets, sets => self.solve_claimed(sets.claim(x, k), threads, stack));
     }
 
-    /// [`solve_global`](Self::solve_global) on one thread, on its claim of an `x` blocks solve at once.
+    /// [`solve_global`](Self::solve_global) on its claim of an `x` that blocks may solve at once.
     fn solve_claimed<V: Batch<T>, P: inflight::parallel::ListedIndex>(
         &self,
         claim: inflight::parallel::Claim<'_, P, V>,
+        threads: Threads,
         stack: &mut MemStack,
     ) {
         on_claimed(
             claim,
             stack,
+            // on_claimed's arms would otherwise each call it: ~19 instructions per block.
             #[inline(always)]
-            |local: &mut [V], rest: &mut MemStack| self.solve_unchecked(local, rest, Threads::ONE),
+            |local: &mut [V], rest: &mut MemStack| self.solve_unchecked(local, rest, threads),
         );
     }
 
@@ -464,12 +436,13 @@ fn splitmix(x: u64) -> u64 {
 #[cfg(feature = "serde")]
 impl<T: Real + serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let (listed, segments) = self.order.persisted();
+        let order = &self.order;
         let blocks = match &self.blocks {
-            Indexed::U32(blocks) => Indexed::U32(Persisted::all(blocks, &segments)),
-            Indexed::U64(blocks) => Indexed::U64(Persisted::all(blocks, &segments)),
+            Indexed::U32(blocks) => Indexed::U32(Persisting { blocks, order }),
+            Indexed::U64(blocks) => Indexed::U64(Persisting { blocks, order }),
         };
-        wire::serialize::<T, _>(serializer, (listed, blocks, &self.inverse_pivots))
+        let body = (order.listed(), blocks, &self.inverse_pivots);
+        wire::serialize::<T, _>(serializer, body)
     }
 }
 
@@ -489,20 +462,24 @@ struct Persisted<'b, T, I> {
     clamp: Option<&'b Clamp>,
 }
 
+/// The coupled blocks as a sequence of [`Persisted`], each on its set of the order, built as written.
 #[cfg(feature = "serde")]
-impl<'b, T, I> Persisted<'b, T, I> {
-    /// Each of `blocks` on its segment.
-    fn all(blocks: &'b [Block<T, I>], segments: &[Segment]) -> Vec<Self> {
-        (blocks.iter().zip(segments))
-            .map(|(block, &segment)| Self {
-                segment,
-                congruence: &block.congruence,
-                elimination: block.elimination.as_deref(),
-                cholesky: &block.cholesky,
-                grounding_unproven: block.grounding_unproven,
-                clamp: block.clamp.as_deref(),
-            })
-            .collect()
+struct Persisting<'b, T, I> {
+    blocks: &'b [Block<T, I>],
+    order: &'b Order,
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize, I: Index + serde::Serialize> serde::Serialize for Persisting<'_, T, I> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.blocks.iter().enumerate().map(|(k, block)| Persisted {
+            segment: self.order.segment(k),
+            congruence: &block.congruence,
+            elimination: block.elimination.as_deref(),
+            cholesky: &block.cholesky,
+            grounding_unproven: block.grounding_unproven,
+            clamp: block.clamp.as_deref(),
+        }))
     }
 }
 
@@ -546,7 +523,7 @@ impl<T, I> Decoded<T, I> {
 /// `(listed, blocks, inverse_pivots)` as decoded.
 #[cfg(feature = "serde")]
 type Body<T> = (
-    crate::order::Listed<Box<[u32]>, Box<[u64]>>,
+    Indexed<Box<[u32]>, Box<[u64]>>,
     Indexed<Vec<Decoded<T, u32>>, Vec<Decoded<T, u64>>>,
     Box<[T]>,
 );

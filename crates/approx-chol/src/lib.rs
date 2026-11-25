@@ -43,6 +43,29 @@ macro_rules! checked_serde {
     };
 }
 
+/// A value in `u32` indices or `u64` ones, whichever its size needs.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename = "Blocks")
+)]
+#[derive(Clone, Copy, Debug)]
+enum Indexed<N, W> {
+    U32(N),
+    U64(W),
+}
+
+/// Runs `$body` on the value, whichever index type stores it.
+macro_rules! on {
+    ($value:expr, $each:ident => $body:expr) => {
+        match $value {
+            crate::Indexed::U32($each) => $body,
+            crate::Indexed::U64($each) => $body,
+        }
+    };
+}
+
+// Below `on!`: a macro_rules macro is visible only to modules declared after it.
 mod adapters;
 mod batch;
 mod error;

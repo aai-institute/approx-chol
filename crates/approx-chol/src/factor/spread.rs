@@ -2,8 +2,8 @@
 
 use inflight::parallel::{Disjoint, Partition, Regions};
 
-use super::{ApproxInverse, Block, Indexed};
-use crate::order::{Order, Sets};
+use super::{ApproxInverse, Block};
+use crate::order::Order;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
 
 /// Steps of the blocks within the budget's share below which they stay on the calling thread: waking the pool cost ~20 µs per apply, and at 3,840–6,336 steps four threads at best broke even.
@@ -131,15 +131,14 @@ impl Spread {
         order: &Order,
         mut alone: impl FnMut(usize, &Block<T, I>),
     ) -> Small {
-        let share = match self.within {
-            Within::All(small) => return small,
-            Within::Share(share) => share,
-        };
+        if let Within::All(small) = self.within {
+            return small;
+        }
         let mut small = Small::default();
         for (k, block) in blocks.iter().enumerate() {
-            match block.n_steps() > share {
-                true => alone(k, block),
-                false => small.add(block.n_steps(), block.global_scratch_slots(order.slots(k))),
+            match self.within(block) {
+                true => small.add(block.n_steps(), block.global_scratch_slots(order.slots(k))),
+                false => alone(k, block),
             }
         }
         small
@@ -195,29 +194,27 @@ impl Spread {
             }
             return;
         }
-        let claim = blocks.len().div_ceil(regions.count() * CLAIMS_PER_WORKER);
-        match &order.sets {
-            Sets::U32(sets) => self.at_once(blocks, sets, x, claim, regions, stack),
-            Sets::U64(sets) => self.at_once(blocks, sets, x, claim, regions, stack),
-        }
+        on!(&order.sets, sets => self.at_once(blocks, sets, x, regions, stack));
     }
 
-    /// The blocks within the share, `claim` at a time on each of `regions`, each on its set of `x`.
+    /// The blocks within the share on each of `regions`, a few claims per region, each on its set of `x`.
     fn at_once<T: Real, I: Index, V: Batch<T>, P: inflight::parallel::ListedIndex + Sync>(
         &self,
         blocks: &[Block<T, I>],
         sets: &Partition<P>,
         x: &mut [V],
-        claim: usize,
         regions: Regions,
         stack: &mut MemStack,
     ) {
+        let claim = blocks.len().div_ceil(regions.count() * CLAIMS_PER_WORKER);
         let x = Disjoint::new(x, sets);
         let work = |stack: &mut MemStack| {
             for (k, rows) in x.claims(claim) {
                 // Past the blocks, the isolated vertices' set, which no block solves.
                 match blocks.get(k) {
-                    Some(block) if self.within(block) => block.solve_claimed(rows, stack),
+                    Some(block) if self.within(block) => {
+                        block.solve_claimed(rows, Threads::ONE, stack)
+                    }
                     _ => {}
                 }
             }
