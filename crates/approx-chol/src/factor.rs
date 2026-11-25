@@ -117,8 +117,8 @@ impl<T: Real> ApproxInverse<T> {
 
     /// One per irreducible block of `A` the factored matrix meets, coupled blocks by their component's lowest vertex in the input's numbering, then isolated vertices; dead vertices are in none.
     pub fn components(&self) -> impl ExactSizeIterator<Item = Component<'_, T>> {
-        let coupled = on!(&self.blocks, blocks => blocks.len());
-        (0..coupled + self.inverse_pivots.len()).map(|k| Component { factor: self, k })
+        let components = self.coupled_blocks() + self.inverse_pivots.len();
+        (0..components).map(|k| Component { factor: self, k })
     }
 
     /// What [`apply_with`](Self::apply_with) takes from its stack for any block of `columns` columns at `threads`, whichever its layout; a copied block takes one pack's scratch whatever its columns. It serves every block of fewer columns; one thread's serves every budget, solving fewer blocks at once to the same bits.
@@ -272,9 +272,16 @@ pub struct Component<'f, T = f64> {
     k: usize,
 }
 
+impl<T> ApproxInverse<T> {
+    /// Its coupled blocks, ahead of the lone vertices among its components.
+    fn coupled_blocks(&self) -> usize {
+        on!(&self.blocks, blocks => blocks.len())
+    }
+}
+
 impl<'f, T> Component<'f, T> {
     fn slots(&self) -> Slots<'f> {
-        let (order, coupled) = (&self.factor.order, on!(&self.factor.blocks, b => b.len()));
+        let (order, coupled) = (&self.factor.order, self.factor.coupled_blocks());
         match self.k.checked_sub(coupled) {
             None => order.slots(self.k),
             Some(lone) => order.lone(lone),
@@ -314,6 +321,14 @@ impl<'f, T: Real> Component<'f, T> {
 }
 
 /// One irreducible block's factor, its local indices stored in `I`; its vertices are its set of the [`Order`].
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(bound(
+        serialize = "T: serde::Serialize, I: Index + serde::Serialize",
+        deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>"
+    ))
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T, I> {
     congruence: Box<Congruence<T>>,
@@ -432,109 +447,36 @@ fn splitmix(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// `(Header, (listed, blocks, inverse_pivots))`: the vertices once, each block's segment, ahead of its parts, a run or a length of the order's `listed`.
+/// `(Header, (listed, segments, blocks, inverse_pivots))`: the vertices once, then each coupled block's set, a run or a length of `listed`, then the blocks.
 #[cfg(feature = "serde")]
 impl<T: Real + serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let order = &self.order;
-        let blocks = match &self.blocks {
-            Indexed::U32(blocks) => Indexed::U32(Persisting { blocks, order }),
-            Indexed::U64(blocks) => Indexed::U64(Persisting { blocks, order }),
-        };
-        let body = (order.listed(), blocks, &self.inverse_pivots);
+        let segments: Vec<Segment> = (0..self.coupled_blocks())
+            .map(|k| order.segment(k))
+            .collect();
+        let body = (order.listed(), segments, &self.blocks, &self.inverse_pivots);
         wire::serialize::<T, _>(serializer, body)
     }
 }
 
-/// A block as persisted: its segment ahead of its parts.
-#[cfg(feature = "serde")]
-#[derive(serde::Serialize)]
-#[serde(
-    rename = "Block",
-    bound(serialize = "T: serde::Serialize, I: Index + serde::Serialize")
-)]
-struct Persisted<'b, T, I> {
-    segment: Segment,
-    congruence: &'b Congruence<T>,
-    elimination: Option<&'b BlockElimination<T, I>>,
-    cholesky: &'b Cholesky<T, I>,
-    grounding_unproven: bool,
-    clamp: Option<&'b Clamp>,
-}
-
-/// The coupled blocks as a sequence of [`Persisted`], each on its set of the order, built as written.
-#[cfg(feature = "serde")]
-struct Persisting<'b, T, I> {
-    blocks: &'b [Block<T, I>],
-    order: &'b Order,
-}
-
-#[cfg(feature = "serde")]
-impl<T: serde::Serialize, I: Index + serde::Serialize> serde::Serialize for Persisting<'_, T, I> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(self.blocks.iter().enumerate().map(|(k, block)| Persisted {
-            segment: self.order.segment(k),
-            congruence: &block.congruence,
-            elimination: block.elimination.as_deref(),
-            cholesky: &block.cholesky,
-            grounding_unproven: block.grounding_unproven,
-            clamp: block.clamp.as_deref(),
-        }))
-    }
-}
-
-/// A block as decoded, its segment ahead of its parts.
-#[cfg(feature = "serde")]
-#[derive(serde::Deserialize)]
-#[serde(
-    rename = "Block",
-    bound(deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>")
-)]
-struct Decoded<T, I> {
-    segment: Segment,
-    congruence: Box<Congruence<T>>,
-    elimination: Option<Box<BlockElimination<T, I>>>,
-    cholesky: Cholesky<T, I>,
-    grounding_unproven: bool,
-    clamp: Option<Box<Clamp>>,
-}
-
-#[cfg(feature = "serde")]
-impl<T, I> Decoded<T, I> {
-    /// The blocks, and each one's segment.
-    fn split(decoded: Vec<Self>) -> (Blocks<T>, Vec<Segment>)
-    where
-        Blocks<T>: From<Box<[Block<T, I>]>>,
-    {
-        let segments = decoded.iter().map(|block| block.segment).collect();
-        let blocks = (decoded.into_iter())
-            .map(|block| Block {
-                congruence: block.congruence,
-                elimination: block.elimination,
-                cholesky: block.cholesky,
-                grounding_unproven: block.grounding_unproven,
-                clamp: block.clamp,
-            })
-            .collect::<Box<[_]>>();
-        (Blocks::from(blocks), segments)
-    }
-}
-
-/// `(listed, blocks, inverse_pivots)` as decoded.
+/// `(listed, segments, blocks, inverse_pivots)` as decoded.
 #[cfg(feature = "serde")]
 type Body<T> = (
     Indexed<Box<[u32]>, Box<[u64]>>,
-    Indexed<Vec<Decoded<T, u32>>, Vec<Decoded<T, u64>>>,
+    Vec<Segment>,
+    Blocks<T>,
     Box<[T]>,
 );
 
-/// Checks the blocks against their segments before anything sized by their `n`: each block's parts agreeing on its segment's length, so a run's length is one its block's bytes back; only then whether each vertex is below `n` and in one place.
+/// Checks the blocks against their segments before anything sized by their `n`: one segment per block, each block's parts agreeing on its length, so a run's length is one its block's bytes back; only then whether each vertex is below `n` and in one place.
 #[cfg(feature = "serde")]
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (listed, blocks, inverse_pivots): Body<T> = wire::deserialize::<T, _, _>(deserializer)?;
-        let (blocks, segments) = on!(blocks, blocks => Decoded::split(blocks));
-        let fits = on!(&blocks, blocks => (blocks.iter().zip(&segments)).all(|(block, segment)| block.holds(segment.len())));
+        let (listed, segments, blocks, inverse_pivots): Body<T> =
+            wire::deserialize::<T, _, _>(deserializer)?;
+        let fits = on!(&blocks, blocks => blocks.len() == segments.len()
+            && (blocks.iter().zip(&segments)).all(|(block, segment)| block.holds(segment.len())));
         let pivots = inverse_pivots.iter().all(|&p| inverse_pivot_in_range(p));
         let order = (fits && pivots)
             .then(|| Order::decoded(listed, &segments))

@@ -18,7 +18,7 @@ impl Header {
     /// The header this build writes for an `ApproxInverse<T>`, and the only one it reads.
     pub fn of<T: Real>() -> Header {
         Header {
-            version: 0x4143_000F,
+            version: 0x4143_0010,
             scalar: T::SCALAR,
         }
     }

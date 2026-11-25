@@ -14,7 +14,7 @@ MATRICES = {
     "frustrated": frustrated_grid(6, 7),
 }
 
-# 0x4143_000F is at least 2**28, so its postcard varint takes 5 bytes.
+# 0x4143_0010 is at least 2**28, so its postcard varint takes 5 bytes.
 SCALAR = 5
 
 

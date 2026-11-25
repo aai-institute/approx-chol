@@ -44,11 +44,7 @@ macro_rules! checked_serde {
 }
 
 /// A value in `u32` indices or `u64` ones, whichever its size needs.
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(rename = "Blocks")
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug)]
 enum Indexed<N, W> {
     U32(N),

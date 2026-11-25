@@ -153,16 +153,16 @@ enum Listed<'a> {
     U32(&'a [u32]),
 }
 
-/// The header, an order listing `dead`, and one block of index tag `tag` up to its segment, the run `0..run`.
+/// The header, an order listing `dead` with one block's segment, the run `0..run`, and that block of index tag `tag` up to its parts.
 fn one_block_head(tag: u8, run: usize, dead: &[u32]) -> Vec<u8> {
-    let mut bytes = postcard::to_stdvec(&(Header::of::<f64>(), Listed::U32(dead))).unwrap();
+    let segments = [Segment::Run { start: 0, len: run }];
+    let order = (Header::of::<f64>(), Listed::U32(dead), &segments[..]);
+    let mut bytes = postcard::to_stdvec(&order).unwrap();
     bytes.extend([tag, 1]);
-    let segment = Segment::Run { start: 0, len: run };
-    bytes.extend(postcard::to_stdvec(&segment).unwrap());
     bytes
 }
 
-/// The header and the order of one `u32` block on `0..n`, up to its segment.
+/// The header and the order of one `u32` block on `0..n`, up to its parts.
 fn one_block_factor(n: u64) -> Vec<u8> {
     one_block_head(0, n as usize, &[])
 }
@@ -304,14 +304,14 @@ fn the_dimension_is_the_vertex_count() {
 #[test]
 fn the_inverse_pivots_count_the_lone_vertices() {
     let v = serde_json::to_value(with_isolated_vertex()).unwrap();
-    assert_eq!(v[1][2].as_array().unwrap().len(), 1, "one lone vertex");
+    assert_eq!(v[1][3].as_array().unwrap().len(), 1, "one lone vertex");
     let mut none = v.clone();
-    none[1][2] = serde_json::json!([]);
+    none[1][3] = serde_json::json!([]);
     let dead: ApproxInverse = serde_json::from_value(none).unwrap();
     assert_eq!(dead.components().len(), 1);
     assert_eq!(dead.solve(&[1.0, 2.0, 3.0]).unwrap()[2], 0.0);
     let mut more = v;
-    more[1][2] = serde_json::json!([0.5, 0.5]);
+    more[1][3] = serde_json::json!([0.5, 0.5]);
     serde_json::from_value::<ApproxInverse>(more).expect_err("more lone vertices than listed");
 }
 
@@ -450,13 +450,13 @@ fn an_isolated_vertex_round_trips_through_json() {
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
 
-/// [`with_isolated_vertex`]'s JSON `[header, [listed, blocks, inverse_pivots]]` with its block's segment and the listed vertices replaced.
+/// [`with_isolated_vertex`]'s JSON `[header, [listed, segments, blocks, inverse_pivots]]` with its block's segment and the listed vertices replaced.
 fn with_order(segment: serde_json::Value, listed: serde_json::Value) -> serde_json::Value {
     let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
     assert_eq!(v[1][0], serde_json::json!({"U32": [2]}));
-    let block = &mut v[1][1]["U32"][0]["segment"];
-    assert_eq!(*block, serde_json::json!({"Run": {"start": 0, "len": 2}}));
-    *block = segment;
+    let first = &mut v[1][1][0];
+    assert_eq!(*first, serde_json::json!({"Run": {"start": 0, "len": 2}}));
+    *first = segment;
     v[1][0] = serde_json::json!({ "U64": listed });
     v
 }
@@ -535,7 +535,7 @@ fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
 fn an_isolated_inverse_pivot_out_of_range_is_corrupt(#[case] by: f64) {
     let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
     serde_json::from_value::<ApproxInverse>(v.clone()).expect("its inverse pivot decodes");
-    let pivot = &mut v[1][2][0];
+    let pivot = &mut v[1][3][0];
     assert_eq!(pivot.as_f64(), Some(0.5));
     *pivot = (0.5 * by).into();
     serde_json::from_value::<ApproxInverse>(v).expect_err("its inverse pivot is out of range");
@@ -572,14 +572,14 @@ fn a_dense_factor_in_a_covers_place_is_corrupt() {
         &[0.0, 0.0, 0.0, 0.0, -1.0, 1.5],
     ];
     let dense = factored_json(&path, 24);
-    let dense = &dense[1][1]["U32"][0]["cholesky"];
-    let covered = &cover[1][1]["U32"][0]["cholesky"];
+    let dense = &dense[1][2]["U32"][0]["cholesky"];
+    let covered = &cover[1][2]["U32"][0]["cholesky"];
     assert_eq!(covered["n"], 6);
     assert!(covered["triangular"].get("Cover").is_some());
     assert_eq!(dense["n"], 6);
     assert!(dense["triangular"].get("Dense").is_some());
     serde_json::from_value::<ApproxInverse>(cover.clone()).expect("the cover decodes");
-    let cholesky = &mut cover[1][1]["U32"][0]["cholesky"];
+    let cholesky = &mut cover[1][2]["U32"][0]["cholesky"];
     cholesky["triangular"] = dense["triangular"].clone();
     serde_json::from_value::<ApproxInverse>(cover).expect_err("a dense factor in a cover's place");
 }
@@ -589,7 +589,7 @@ fn a_dense_factor_in_a_covers_place_is_corrupt() {
 fn a_covers_steps_on_one_sheet_are_corrupt() {
     let mut cover = triangle_cover();
     serde_json::from_value::<ApproxInverse>(cover.clone()).expect("the cover decodes");
-    let triangular = &mut cover[1][1]["U32"][0]["cholesky"]["triangular"];
+    let triangular = &mut cover[1][2]["U32"][0]["cholesky"]["triangular"];
     let pinned_steps = triangular["Cover"].take();
     assert!(
         pinned_steps[0].is_object(),
