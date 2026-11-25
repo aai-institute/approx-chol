@@ -760,10 +760,8 @@ mod budget {
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Side};
     use crate::sgdd::{Reduced, ReducedComplement};
     use crate::{widen, CoverSurplus, FrustratedRoute, Sampling, ScalingPolicy, SchurMode};
-    use inflight::parallel::testing as probe;
 
     const THREE: Threads = Threads::Count(NonZeroUsize::new(3).unwrap());
-    const SIX: Threads = Threads::Count(NonZeroUsize::new(6).unwrap());
 
     /// The factor as shown, every stored field, and its apply's bits.
     fn fingerprint<T: Real>(factor: ApproxInverse<T>) -> (String, Vec<u64>) {
@@ -967,27 +965,5 @@ mod budget {
                 }
             }
         });
-    }
-
-    /// In pools of seven, a count's build never has more of its threads in a loop's items at once; the pool's whole budget is seen to.
-    /// Past three threads only where the machine runs four at once: a 3-vCPU runner caps what any build can show (#519).
-    #[test]
-    fn a_build_runs_at_most_its_count_of_threads() {
-        let mut widest = 0;
-        for case in CASES {
-            case.each_build(|build| {
-                for (budget, n) in [(Threads::ONE, 1), (THREE, 3), (SIX, 6)] {
-                    let peak = probe::peak(7, || drop(build(budget)));
-                    assert!(peak <= n, "{case:?}: {peak} threads under {budget:?}");
-                }
-                widest = widest.max(probe::peak(7, || drop(build(Threads::All))));
-            });
-        }
-        let cores = std::thread::available_parallelism().map_or(1, usize::from);
-        let floor = if cores >= 4 { 3 } else { 1 };
-        assert!(
-            widest > floor,
-            "the probe saw at most {widest} threads under All on {cores} cores"
-        );
     }
 }

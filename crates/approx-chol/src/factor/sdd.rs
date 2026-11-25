@@ -7,7 +7,6 @@ use super::sign::cancel;
 use crate::sgdd::{Balance, FactorTail, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Batch, Index, Real, Threads};
-use inflight::parallel::instrument_task;
 
 /// An SDD matrix, a signed graph's Laplacian plus a surplus: `M` itself, its off-diagonal nonpositive or of either sign, or `M`'s Gremban cover on two interleaved sheets, each vertex's copies sharing its surplus.
 pub(super) struct Sdd<T, I> {
@@ -304,10 +303,10 @@ impl<T: Real, I: Index> SddRows<T, I> {
         let rows = match threads.per_task(n, min_len) {
             None => (0..n).fold(RowSums::new(columns), add),
             Some(per) => {
-                let rows = (0..n).into_par_iter().with_min_len(per).fold(
-                    || RowSums::new(columns),
-                    |rows, k| instrument_task(|| add(rows, k)),
-                );
+                let rows = (0..n)
+                    .into_par_iter()
+                    .with_min_len(per)
+                    .fold(|| RowSums::new(columns), add);
                 let rows = rows.reduce_with(|mut rows, part| {
                     let offset = rows.indices.len();
                     rows.ptrs.extend(part.ptrs[1..].iter().map(|&p| p + offset));
