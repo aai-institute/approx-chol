@@ -269,3 +269,71 @@ fn phased_blocks_are_bit_identical_across_thread_counts() {
         (shown, solved)
     });
 }
+
+/// A panel as within hands one over: 80 000 people, three consecutive of 40 000 firms each, as an incidence. Its people's ascending rows pass the assembly's piece size and its firms the merge's row split, so the complement onto the firms, its factor and its solve agree bit for bit across budgets.
+#[test]
+fn a_panels_complement_is_bit_identical_across_thread_counts() {
+    let (people, firms, per_person) = (80_000, 40_000, 3);
+    let columns = 0..people * per_person;
+    let g = Bipartite {
+        n_left: people,
+        n_right: firms,
+        left: columns.clone().map(|k| (k / per_person) as u32).collect(),
+        right: columns.map(|k| (k % firms) as u32).collect(),
+        values: None,
+    };
+    threads::across_pools(|| {
+        let policy = ScalingPolicy::default();
+        let build = |threads| {
+            let complement = Complement::reduce_onto(g.view(), Side::Right, policy, threads);
+            complement.unwrap().factor(Config::default(), threads)
+        };
+        let [factor, rest @ ..] = threads::BUDGETS.map(build);
+        let shown = format!("{factor:?}");
+        for (threads, built) in threads::BUDGETS[1..].iter().zip(&rest) {
+            assert_eq!(format!("{built:?}"), shown, "built at {threads:?}");
+        }
+        let b: Vec<f64> = (0..factor.n())
+            .map(|i| ((i * 7919) % 101) as f64 / 50.0 - 1.0)
+            .collect();
+        (shown, bits(&factor.solve(&b).unwrap()))
+    });
+}
+
+/// Formed under one budget and factored under another, a complement's factor is the one [`Complement::factor`] builds in one call, and the formed complement reads the reduction's clamps.
+#[rstest]
+#[case::ac(Config::default())]
+#[case::ac2(Config { sampling: clique_tree(3), ..Config::default() })]
+#[case::exact(Config { complement: SchurMode::Exact, ..Config::default() })]
+fn a_complement_formed_then_factored_is_the_one_call(
+    #[case] config: Config,
+    #[values(Side::Left, Side::Right)] kept: Side,
+) {
+    let g = Bipartite::three_groups();
+    let policy = ScalingPolicy::default();
+    let reduce = |threads| Complement::reduce_onto(g.view(), kept, policy, threads).unwrap();
+    let clamps = |vertices: Vec<Vec<usize>>| format!("{vertices:?}");
+    threads::across_pools(|| {
+        let whole = format!("{:?}", reduce(threads::ONE).factor(config, threads::ONE));
+        for form_at in threads::BUDGETS {
+            let reduced = reduce(form_at);
+            let read = clamps(reduced.clamps().map(|c| c.vertices().collect()).collect());
+            let formed = reduced.form(config, form_at);
+            assert_eq!(
+                clamps(formed.clamps().map(|c| c.vertices().collect()).collect()),
+                read
+            );
+            for factor_at in threads::BUDGETS {
+                let split = format!(
+                    "{:?}",
+                    reduce(form_at).form(config, form_at).factor(factor_at)
+                );
+                assert_eq!(
+                    split, whole,
+                    "formed at {form_at:?}, factored at {factor_at:?}"
+                );
+            }
+        }
+        whole
+    });
+}

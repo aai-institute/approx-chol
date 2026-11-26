@@ -21,7 +21,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         policy: &ScalingPolicy,
         threads: Threads,
     ) -> Result<Self, BuildError> {
-        let (cuts, components) = assemble_values::<T, J, I, S>(cells, v)?.arrange()?;
+        let (cuts, components) = assemble_values::<T, J, I, S>(cells, v, threads)?.arrange()?;
         components.cut(|components| {
             // Built by whichever block first fails dominance: a dominant input pays only once a block's band fails.
             let nulls = OnceLock::<(Vec<f64>, Vec<I>)>::new();

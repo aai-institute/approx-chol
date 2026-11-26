@@ -4,6 +4,8 @@ pub(super) mod bipartite;
 pub(super) mod laplacian;
 pub(super) mod weights;
 
+use std::ops::Range;
+
 use num_traits::PrimInt;
 
 use self::weights::Weight;
@@ -108,6 +110,36 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     /// Whether `a` ascends, so a bipartite `V`'s columns come grouped by left vertex in order.
     pub(crate) fn left_ends_ascend(&self) -> bool {
         self.a.is_sorted()
+    }
+
+    /// Column `k`'s end `a`, the left vertex of a bipartite `V`.
+    pub(crate) fn left_end(&self, k: usize) -> usize {
+        index(self.a[k])
+    }
+
+    /// `V`'s columns `range` alone, on the same vertices.
+    pub(crate) fn columns(self, range: Range<usize>) -> Self {
+        let cut = |x: &'a [T]| &x[range.clone()];
+        let columns = match self.columns {
+            Columns::Incidence { n, w, surplus } => Columns::Incidence {
+                n,
+                w: w.map(cut),
+                surplus,
+            },
+            Columns::FactorWidth2 { n, x, y } => Columns::FactorWidth2 {
+                n,
+                x: cut(x),
+                y: cut(y),
+            },
+            Columns::Bipartite(c) => Columns::Bipartite(BipartiteColumns {
+                x: c.x.map(cut),
+                y: c.y.map(cut),
+                scale: c.scale.map(cut),
+                ..c
+            }),
+        };
+        let (a, b) = (&self.a[range.clone()], &self.b[range]);
+        Self { a, b, columns }
     }
 
     /// Each column in order; write `visit` as `#[inline(always)] |column| …` (outlined: 1.6-1.9x).

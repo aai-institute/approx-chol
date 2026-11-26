@@ -1,5 +1,7 @@
 //! The Schur complement `S` a bipartite block leaves on its kept side, formed exact or sampled.
 
+use inflight::parallel::Pieces;
+
 use super::block_elimination::BlockElimination;
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Pair, Single};
 use super::config::{Config, SchurMode};
@@ -57,7 +59,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         let rows = match formation(config, self.cross.n_cols()) {
             Formation::Exact => self.exact(&inv_pivot, route, threads, kept),
             Formation::Sampled(copies) => {
-                (self.sample(copies, route, streams, threads)).merge(kept)
+                (self.sample(copies, route, streams, threads)).merge(kept, threads)
             }
         };
         let s = rows.close();
@@ -81,7 +83,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 let fill = self.sample(copies, route, streams, threads);
                 // The merge never reads `C`.
                 drop(self.cross);
-                fill.merge(kept)
+                fill.merge(kept, threads)
             }
         };
         rows.close()
@@ -330,9 +332,12 @@ struct Fill<T, I> {
     pieces: Vec<Buckets<T, I>>,
 }
 
+/// The fewest rows of a bucket one task merges: each task sums into its own row of `S`'s width.
+const MERGE_MIN_ROWS: usize = 1 << 10;
+
 impl<T: Real, I: Index> Fill<T, I> {
-    /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; each row's ground is its vertex's `ground`.
-    fn merge(self, ground: Option<Vec<T>>) -> SddRows<T, I> {
+    /// Bucket by bucket: each group of chunks counting-sorts its fill by row on its own, then each row merges its duplicates from every group in chunk order and stores `−w`, so the bits match at any thread count; each row's ground is its vertex's `ground`.
+    fn merge(self, ground: Option<Vec<T>>, threads: Threads) -> SddRows<T, I> {
         let Self {
             route,
             kept,
@@ -341,43 +346,81 @@ impl<T: Real, I: Index> Fill<T, I> {
         let n = route.layout().rows(kept);
         let stride = 1 << bucket_shift(n);
         let count = n.div_ceil(stride);
-        let bucket = |b: usize| pieces.iter().map(|p| p[b].len()).sum();
-        let most = (0..count).map(bucket).max().unwrap_or(0);
-        let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
-        let (mut starts, mut next) = (Vec::new(), Vec::new());
+        // Consecutive chunks per group, a few groups a task, so a bucket's sorted copy is all the fill copied at once.
+        let groups = pieces.len().div_ceil(4 * threads.tasks()).max(1);
+        let cuts: Vec<usize> = (0..pieces.len().div_ceil(groups))
+            .map(|g| g * groups)
+            .chain([pieces.len()])
+            .collect();
         let mut rows = SddRows::new(route, kept, ground);
         for b in 0..count {
-            let first = b * stride;
-            let len = (n - first).min(stride);
-            starts.clear();
-            starts.resize(len + 1, 0);
-            // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
-            for piece in &pieces {
-                for &(lo, _, _) in &piece[b] {
-                    starts[lo.index() - first + 1] += 1;
-                }
-            }
-            for i in 0..len {
-                starts[i + 1] += starts[i];
-            }
-            next.clear();
-            next.extend_from_slice(&starts[..len]);
-            for piece in &mut pieces {
-                for (lo, hi, w) in std::mem::take(&mut piece[b]) {
-                    let at = next[lo.index() - first];
-                    columns[at] = hi;
-                    weights[at] = w;
-                    next[lo.index() - first] += 1;
-                }
-            }
-            for span in starts.windows(2) {
-                let (columns, weights) = (&columns[span[0]..span[1]], &weights[span[0]..span[1]]);
-                rows.row(|mut sums| {
+            let (first, len) = (b * stride, (n - b * stride).min(stride));
+            let mut sorted: Vec<Sorted<T, I>> = (1..cuts.len()).map(|_| Sorted::empty()).collect();
+            let input = (Pieces::new(&mut pieces[..], &cuts), &mut sorted[..]);
+            threads.for_each_item(input, |_, (chunks, sorted)| {
+                *sorted = Sorted::of(chunks, b, first, len);
+            });
+            let min_len = MERGE_MIN_ROWS.max(len / (4 * threads.tasks()));
+            rows.extend(len, min_len, threads, |mut sums, i| {
+                for (columns, weights) in sorted.iter().map(|group| group.row(i)) {
                     (columns.iter().zip(weights)).for_each(|(&hi, &w)| sums.add(hi.index(), w));
-                });
-            }
+                }
+            });
         }
         rows
+    }
+}
+
+/// A group of chunks' fill in one bucket, counting-sorted by row, each row's edges in chunk order.
+struct Sorted<T, I> {
+    starts: Vec<usize>,
+    columns: Vec<I>,
+    weights: Vec<T>,
+}
+
+impl<T: Real, I: Index> Sorted<T, I> {
+    fn empty() -> Self {
+        let (starts, columns, weights) = (Vec::new(), Vec::new(), Vec::new());
+        Self {
+            starts,
+            columns,
+            weights,
+        }
+    }
+
+    /// Bucket `b` of `chunks`, its `len` rows from `first` on, taken out of them.
+    fn of(chunks: &mut [Buckets<T, I>], b: usize, first: usize, len: usize) -> Self {
+        let mut starts = vec![0; len + 1];
+        // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
+        for chunk in chunks.iter() {
+            for &(lo, _, _) in &chunk[b] {
+                starts[lo.index() - first + 1] += 1;
+            }
+        }
+        for i in 0..len {
+            starts[i + 1] += starts[i];
+        }
+        let mut next = starts[..len].to_vec();
+        let (mut columns, mut weights) =
+            (vec![I::zero(); starts[len]], vec![T::zero(); starts[len]]);
+        for chunk in chunks {
+            for (lo, hi, w) in std::mem::take(&mut chunk[b]) {
+                let at = &mut next[lo.index() - first];
+                (columns[*at], weights[*at]) = (hi, w);
+                *at += 1;
+            }
+        }
+        Self {
+            starts,
+            columns,
+            weights,
+        }
+    }
+
+    /// Row `i`'s columns and weights.
+    fn row(&self, i: usize) -> (&[I], &[T]) {
+        let span = self.starts[i]..self.starts[i + 1];
+        (&self.columns[span.clone()], &self.weights[span])
     }
 }
 

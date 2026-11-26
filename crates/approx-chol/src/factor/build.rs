@@ -3,13 +3,13 @@
 use num_traits::PrimInt;
 use rayon::iter::Either;
 
-use super::{ApproxInverse, Indexed, Summand};
+use super::{ApproxInverse, FormedBlock, Indexed, Summand};
 use crate::input::{BipartiteFactorWidth2, Input, Side};
 use crate::order::Slots;
 use crate::sgdd::{
     BlockComplement, CoupledBlock, IrreducibleBlock, Packed, Reduced, ReducedComplement, Summands,
 };
-use crate::{BuildError, Clamp, Config, Real, ScalingPolicy, Threads};
+use crate::{BuildError, Clamp, Config, Index, Real, ScalingPolicy, Threads};
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
 pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, BuildError>
@@ -54,11 +54,39 @@ pub struct Sgdd<T = f64>(Indexed<PackedSgdd<T, u32>, PackedSgdd<T, u64>>);
 #[derive(Clone, Debug)]
 pub struct Complement<T = f64>(Indexed<PackedComplement<T, u32>, PackedComplement<T, u64>>);
 
+/// Built only by [`Complement::form`]: each block's complement formed onto its kept side under the [`Config`] it will be factored under, `C` and any sampled fill freed, so only the factor is left to build.
+pub struct FormedComplement<T = f64> {
+    blocks: Indexed<PackedFormed<T, u32>, PackedFormed<T, u64>>,
+    config: Config,
+}
+
 /// A reduction packed for its factor, its indices in `I`.
 type PackedSgdd<T, I> = Packed<IrreducibleBlock<T, I>, T>;
 
 /// A reduced complement packed for its factor, its indices in `I`.
 type PackedComplement<T, I> = Packed<BlockComplement<T, I>, T>;
+
+/// Formed complements packed for their factor, their indices in `I`.
+type PackedFormed<T, I> = Packed<FormedBlock<T, I>, T>;
+
+/// Each block of `packed` formed, a block a task under `threads`, in the order kept.
+fn formed<T: Real, I: Index>(
+    packed: PackedComplement<T, I>,
+    config: &Config,
+    threads: Threads,
+) -> PackedFormed<T, I> {
+    let Packed {
+        order,
+        coupled,
+        pivots,
+    } = packed;
+    let coupled = (threads.schedule(1)).map(coupled, |_, block, nested| block.form(config, nested));
+    Packed {
+        order,
+        coupled,
+        pivots,
+    }
+}
 
 impl<N, W> Indexed<N, W> {
     /// `narrow` while `u32` indexes a cover's two sheets and its ground, the most slots any block of `n` vertices takes, else `wide`.
@@ -135,9 +163,40 @@ impl<T: Real> Complement<T> {
         self.0.clamps()
     }
 
-    /// Forms each block's complement under [`Config::complement`] and factors it under `threads`; the factor's vertex `k` is the kept side's `k`-th.
+    /// Forms each block's complement under [`Config::complement`] and `threads`, freeing `C` and the sampled fill: the first half of [`factor`](Self::factor), so a caller can hold several formed complements, factoring each on the side while it forms the next, without holding their `C`s at once.
+    pub fn form(self, config: Config, threads: Threads) -> FormedComplement<T> {
+        let blocks = match self.0 {
+            Indexed::U32(packed) => Indexed::U32(formed(packed, &config, threads)),
+            Indexed::U64(packed) => Indexed::U64(formed(packed, &config, threads)),
+        };
+        FormedComplement { blocks, config }
+    }
+
+    /// Forms each block's complement under [`Config::complement`] and factors it under `threads`; the factor's vertex `k` is the kept side's `k`-th. Bit for bit [`form`](Self::form) then [`FormedComplement::factor`].
     pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T> {
-        self.0.factor(&config, threads)
+        self.form(config, threads).factor(threads)
+    }
+}
+
+impl<T: Real> FormedComplement<T> {
+    /// One [`Clamped`] per clamped component of `A`, on its kept vertices, in the order [`ApproxInverse::components`] will list them.
+    pub fn clamps(&self) -> impl Iterator<Item = Clamped<'_>> {
+        self.blocks.clamps()
+    }
+
+    /// Factors each formed complement under `threads` and the [`Config`] it was formed under, as [`Complement::factor`] would have.
+    pub fn factor(self, threads: Threads) -> ApproxInverse<T> {
+        self.blocks.factor(&self.config, threads)
+    }
+}
+
+impl<T> core::fmt::Debug for FormedComplement<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let blocks = on!(&self.blocks, packed => packed.coupled.len());
+        f.debug_struct("FormedComplement")
+            .field("blocks", &blocks)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
     }
 }
 

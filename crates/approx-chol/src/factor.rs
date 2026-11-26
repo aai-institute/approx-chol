@@ -12,11 +12,15 @@ mod sign;
 #[cfg(feature = "serde")]
 mod wire;
 
+use std::ops::Range;
+
 use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 
 pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
-pub use build::{factorize, factorize_complement, factorize_with, Clamped, Complement, Sgdd};
+pub use build::{
+    factorize, factorize_complement, factorize_with, Clamped, Complement, FormedComplement, Sgdd,
+};
 pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 pub use header::{Header, HeaderMismatch, Scalar};
 
@@ -240,18 +244,74 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
 }
 
 impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
-    /// Keyed as a whole block keys its draws.
+    /// Formed, then factored: as a [`FormedBlock`] factors.
     fn factor(
         self,
-        _: Slots<'_>,
+        slots: Slots<'_>,
         config: &Config,
         threads: Threads,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
+        self.form(config, threads)
+            .factor(slots, config, threads, reused)
+    }
+}
+
+/// A block's complement formed onto its kept side, its Cholesky factor all that is left: `C` and any sampled fill are freed.
+pub(crate) struct FormedBlock<T, I> {
+    s: Sdd<T, I>,
+    congruence: Box<Congruence<T>>,
+    streams: Streams,
+    kept: Range<usize>,
+    grounding_unproven: bool,
+    clamp: Option<Box<Clamp>>,
+}
+
+impl<T: Real, I: Index> BlockComplement<T, I> {
+    /// `S` formed under `config.complement`, keyed as a whole block keys its draws.
+    pub(crate) fn form(self, config: &Config, threads: Threads) -> FormedBlock<T, I> {
+        let kept = self.kept();
         let (first, congruence, cross, balance, grounding, grounding_unproven, clamp) =
             self.into_parts();
         let streams = Streams::of(first, config);
         let s = BipartiteBlock::of(cross, balance, grounding).complement(config, streams, threads);
+        FormedBlock {
+            s,
+            congruence,
+            streams,
+            kept,
+            grounding_unproven,
+            clamp,
+        }
+    }
+}
+
+impl<T, I> CoupledBlock for FormedBlock<T, I> {
+    fn kept(&self) -> Range<usize> {
+        self.kept.clone()
+    }
+
+    fn clamp(&self) -> Option<&Clamp> {
+        self.clamp.as_deref()
+    }
+}
+
+impl<T: Real, I: Index> Summand<T, I> for FormedBlock<T, I> {
+    fn factor(
+        self,
+        _: Slots<'_>,
+        config: &Config,
+        _: Threads,
+        reused: &mut Workspace<T, I>,
+    ) -> Block<T, I> {
+        let Self {
+            s,
+            congruence,
+            streams,
+            grounding_unproven,
+            clamp,
+            ..
+        } = self;
         let tail = congruence.factor_tail(0);
         let cholesky = Cholesky::factor(s, config, streams.cholesky(), tail, reused);
         Block {

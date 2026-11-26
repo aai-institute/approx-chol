@@ -1,10 +1,11 @@
 //! `A`'s cells summed from `V`'s columns, row by row in column order.
 
+use inflight::parallel::Pieces;
 use num_traits::PrimInt;
 
 use crate::input::{Column, FactorWidth2};
 use crate::storage::Rows;
-use crate::{in_range, narrow, widen, BuildError, Index, Real};
+use crate::{in_range, narrow, widen, BuildError, Index, Real, Threads};
 
 /// `A`'s strict upper triangle; `pair` sees each nonzero cell.
 pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
@@ -17,14 +18,22 @@ pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
 }
 
 /// The biadjacency `C` from the left part's rows, summed as [`Accumulator::of`] picks.
-pub(super) fn cross<T: Real, J: PrimInt, I: Index>(
+pub(super) fn cross<T: Real, J: PrimInt + Sync, I: Index>(
     v: FactorWidth2<'_, T, J>,
     n_left: usize,
     seen: impl FnMut(&Column<T, I>),
     pair: impl FnMut(usize, usize, f64),
+    threads: Threads,
 ) -> Result<Rows<T, I>, BuildError> {
-    Accumulator::of::<T, I>(n_left, v.n() - n_left, v.n_columns()).cross(v, n_left, seen, pair)
+    let accumulator = Accumulator::of::<T, I>(n_left, v.n() - n_left, v.n_columns());
+    accumulator.cross(v, n_left, seen, pair, threads)
 }
+
+/// The fewest columns a piece of rows read in place takes: below it the rows stay on the calling thread.
+const PIECE_MIN_COLUMNS: usize = 1 << 16;
+
+/// Pieces per task, so a long row in one piece doesn't hold up the rest.
+const PIECES_PER_TASK: usize = 4;
 
 /// within's cap on the dense table, about 40 MB.
 const DENSE_TABLE_MAX_CELLS: usize = 5_000_000;
@@ -71,18 +80,26 @@ impl Accumulator {
             .saturating_add(n_right.saturating_mul(per_right))
     }
 
-    fn cross<T: Real, J: PrimInt, I: Index>(
+    fn cross<T: Real, J: PrimInt + Sync, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
         n_left: usize,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
+        threads: Threads,
     ) -> Result<Rows<T, I>, BuildError> {
         // `?` per arm: returning the arms' results directly reshuffled the whole build's inlining.
         let a = match self {
             Self::Table => dense_cross(v, n_left, seen, pair)?,
             // Panels come sorted by their left side; reading them in place skips the buckets (−11–33% on within's 1M AKMs).
-            Self::Buckets if v.left_ends_ascend() => left_ascending(v, n_left, seen, pair)?,
+            Self::Buckets if v.left_ends_ascend() => {
+                let per =
+                    PIECE_MIN_COLUMNS.max(v.n_columns() / (PIECES_PER_TASK * threads.tasks()));
+                match row_pieces(&v, n_left, per, threads) {
+                    Some(pieces) => in_pieces(v, n_left, &pieces, seen, pair, threads)?,
+                    None => left_ascending(v, n_left, seen, pair)?,
+                }
+            }
             Self::Buckets => {
                 let counts = counts::<T, J, I>(v, n_left, seen);
                 sum_cells::<T, J, I>(v, &counts, n_left, pair)?
@@ -266,6 +283,133 @@ fn left_ascending<T: Real, J: PrimInt, I: Index>(
     Ok(Rows::new(ptrs, columns, values, n_cols))
 }
 
+/// `V`'s columns cut at left vertices' first columns, about `per` a piece, and the rows each piece closes.
+struct RowPieces {
+    /// Piece `p` reads columns `columns[p]..columns[p + 1]`.
+    columns: Vec<usize>,
+    /// Piece `p` closes rows `rows[p]..rows[p + 1]`, those without a column among them.
+    rows: Vec<usize>,
+}
+
+/// The cuts, or `None` when one piece would take every column or one thread runs.
+fn row_pieces<T: Real, J: PrimInt>(
+    v: &FactorWidth2<'_, T, J>,
+    n_left: usize,
+    per: usize,
+    threads: Threads,
+) -> Option<RowPieces> {
+    let n = v.n_columns();
+    threads.per_task(n, per)?;
+    let (mut columns, mut rows) = (vec![0], vec![0]);
+    let mut k = per;
+    while k < n {
+        // A row's columns never part: the cut moves on to the next row's first.
+        while k < n && v.left_end(k) == v.left_end(k - 1) {
+            k += 1;
+        }
+        if k < n {
+            columns.push(k);
+            rows.push(v.left_end(k));
+        }
+        k += per;
+    }
+    columns.push(n);
+    rows.push(n_left);
+    (columns.len() > 2).then_some(RowPieces { columns, rows })
+}
+
+/// [`left_ascending`]'s rows summed a piece a task, each row whole in one piece and so summed alike; then, in order on the calling thread, `seen` sees each column and `pair` each cell as `left_ascending` would have them seen.
+fn in_pieces<T: Real, J: PrimInt + Sync, I: Index>(
+    v: FactorWidth2<'_, T, J>,
+    n_left: usize,
+    pieces: &RowPieces,
+    mut seen: impl FnMut(&Column<T, I>),
+    mut pair: impl FnMut(usize, usize, f64),
+    threads: Threads,
+) -> Result<Rows<T, I>, BuildError> {
+    let n_cols = v.n() - n_left;
+    let RowPieces {
+        columns: cuts,
+        rows,
+    } = pieces;
+    // A row never sums more cells than it has columns: each piece writes from its first column's slot.
+    let mut columns = vec![I::zero(); v.n_columns()];
+    let mut cells = vec![0.0_f64; v.n_columns()];
+    // Each row's count first, then its end.
+    let mut ptrs = vec![0; n_left + 1];
+    let input = (
+        Pieces::new(&mut columns[..], cuts),
+        Pieces::new(&mut cells[..], cuts),
+        Pieces::new(&mut ptrs[1..], rows),
+    );
+    threads.for_each_item(input, |p, (columns, cells, counts)| {
+        let v = v.columns(cuts[p]..cuts[p + 1]);
+        sum_piece(v, rows[p], n_left, columns, cells, counts);
+    });
+    v.for_each_column::<I>(
+        #[inline(always)]
+        |column| seen(&column),
+    );
+    // Pieces closed up in order, each cell seen by `pair` and screened where `left_ascending` would.
+    let mut end = 0;
+    for p in 0..cuts.len() - 1 {
+        let mut from = cuts[p];
+        for i in rows[p]..rows[p + 1] {
+            for _ in 0..ptrs[i + 1] {
+                let (j, cell) = (columns[from], cells[from]);
+                pair(i, n_left + j.index(), cell);
+                admit::<T>(i, cell)?;
+                (columns[end], cells[end]) = (j, cell);
+                (from, end) = (from + 1, end + 1);
+            }
+            ptrs[i + 1] = end;
+        }
+    }
+    columns.truncate(end);
+    columns.shrink_to_fit();
+    cells.truncate(end);
+    cells.shrink_to_fit();
+    let values = cells.into_iter().map(narrow).collect();
+    Ok(Rows::new(ptrs, columns, values, n_cols))
+}
+
+/// A piece's rows from `first_row` on, summed as [`left_ascending`] sums them: their cells to `columns` and `cells` from the front, each row's count to `counts`.
+fn sum_piece<T: Real, J: PrimInt, I: Index>(
+    v: FactorWidth2<'_, T, J>,
+    first_row: usize,
+    n_left: usize,
+    columns: &mut [I],
+    cells: &mut [f64],
+    counts: &mut [usize],
+) {
+    let mut row = OpenRow::new(v.n() - n_left);
+    let (mut open, mut out, n_rows) = (0, 0, counts.len());
+    let mut close = |row: &mut OpenRow<I>, open: &mut usize| {
+        let before = out;
+        let Ok(()) = row.drain(|j, cell| {
+            (columns[out], cells[out]) = (j, cell);
+            out += 1;
+            Ok::<(), BuildError>(())
+        }) else {
+            unreachable!("emitting to a slot never fails")
+        };
+        counts[*open] = out - before;
+        *open += 1;
+    };
+    v.for_each_column::<I>(
+        #[inline(always)]
+        |column| {
+            while first_row + open < column.a.index() {
+                close(&mut row, &mut open);
+            }
+            row.add(column.b - I::from_index(n_left), column.cell());
+        },
+    );
+    while open < n_rows {
+        close(&mut row, &mut open);
+    }
+}
+
 /// One row's cells summed in column order, each column's first cell marking it touched.
 struct OpenRow<I> {
     /// One slot past the columns, where the empty run stores its zero.
@@ -336,6 +480,7 @@ mod tests {
                 n_left,
                 |column| seen.push((column.a, column.b, column.cell())),
                 |i, j, cell| pairs.push((i, j, cell)),
+                Threads::ONE,
             );
             (rows.map(|rows| format!("{rows:?}")), seen, pairs)
         })
@@ -469,8 +614,66 @@ mod tests {
         )
         .unwrap();
         let rows = Accumulator::Table
-            .cross::<f64, u32, u32>(gram.lower(), 4, |_| {}, |_, _, _| {})
+            .cross::<f64, u32, u32>(gram.lower(), 4, |_| {}, |_, _, _| {}, Threads::ONE)
             .unwrap();
         assert!(rows.holds_no_slack());
+    }
+
+    /// `C`'s rows read in place, in pieces or in one pass, with `seen` and `pair` in their order.
+    fn in_place<T: Real>(v: FactorWidth2<'_, T, u32>, n_left: usize, per: Option<usize>) -> Summed {
+        let (mut seen, mut pairs) = (Vec::new(), Vec::new());
+        let see = |column: &Column<T, u32>| seen.push((column.a, column.b, column.cell()));
+        let pair = |i, j, cell| pairs.push((i, j, cell));
+        let rows = match per.and_then(|per| row_pieces(&v, n_left, per, Threads::All)) {
+            Some(pieces) => in_pieces(v, n_left, &pieces, see, pair, Threads::All),
+            None => left_ascending(v, n_left, see, pair),
+        };
+        (rows.map(|rows| format!("{rows:?}")), seen, pairs)
+    }
+
+    /// Cut inside long rows and beside rows with no column, valid or overflowing `f32` in a later piece: the rows or error, `seen` and `pair` match one pass's.
+    #[test]
+    fn rows_read_in_pieces_sum_as_one_pass() {
+        let left = [0, 0, 0, 1, 1, 3, 3, 3, 3, 4, 7, 7, 8, 8, 8];
+        let right = [2, 0, 2, 1, 1, 0, 3, 3, 0, 4, 1, 2, 4, 0, 4];
+        let x = [
+            1.0, 2.0, -1.0, 1.0, 0.5, 1.25, 2.0, 2.0, 1.0, 3.0, 1.0, 0.75, 1.0, 2.5, 1.0,
+        ];
+        let mut y = [
+            1.0, 0.25, 1.0, 1.5, -1.5, 1.0, 0.75, -0.75, -1.0, 1.0, -0.5, 2.0, 1.0, -1.0, 0.25,
+        ];
+        let n_left = 10;
+        inflight::parallel::testing::in_pool(4, || {
+            let gram = BipartiteFactorWidth2::new(
+                FactorWidth1::valued(n_left, &left, &x).unwrap(),
+                FactorWidth1::valued(5, &right, &y).unwrap(),
+            )
+            .unwrap()
+            .lower();
+            for per in 1..=4 {
+                assert!(row_pieces(&gram, n_left, per, Threads::All).is_some());
+                assert_eq!(
+                    in_place(gram, n_left, Some(per)),
+                    in_place(gram, n_left, None)
+                );
+            }
+        });
+        // Row 7's first cell overflows `f32`, past rows 0–4's pieces.
+        let mut x32 = x.map(|x| x as f32);
+        (x32[10], y[10]) = (1e30, 1e10);
+        let y32 = y.map(|y| y as f32);
+        inflight::parallel::testing::in_pool(4, || {
+            let gram = BipartiteFactorWidth2::new(
+                FactorWidth1::valued(n_left, &left, &x32).unwrap(),
+                FactorWidth1::valued(5, &right, &y32).unwrap(),
+            )
+            .unwrap()
+            .lower();
+            for per in 1..=4 {
+                let pieces = in_place(gram, n_left, Some(per));
+                assert_eq!(pieces.0, Err(BuildError::OutOfRange { vertex: 7 }));
+                assert_eq!(pieces, in_place(gram, n_left, None));
+            }
+        });
     }
 }

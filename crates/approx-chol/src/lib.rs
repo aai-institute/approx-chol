@@ -81,8 +81,9 @@ pub use dyn_stack::{MemBuffer, MemStack, StackReq};
 pub use error::BuildError;
 pub use factor::{
     factorize, factorize_complement, factorize_with, ApplyError, ApproxInverse, Clamped,
-    ColumnMajor, Columns, Complement, Component, Config, CoverSurplus, FrustratedRoute, Header,
-    HeaderMismatch, LayoutError, MatrixMut, Sampling, Scalar, SchurMode, Sgdd,
+    ColumnMajor, Columns, Complement, Component, Config, CoverSurplus, FormedComplement,
+    FrustratedRoute, Header, HeaderMismatch, LayoutError, MatrixMut, Sampling, Scalar, SchurMode,
+    Sgdd,
 };
 use inflight::parallel::Blocks;
 pub use inflight::parallel::Threads;

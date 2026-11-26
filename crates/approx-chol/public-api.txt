@@ -425,6 +425,7 @@ pub struct approx_chol::Complement<T>(_)
 impl<T: approx_chol::Real> approx_chol::Complement<T>
 pub fn approx_chol::Complement<T>::clamps(&self) -> impl core::iter::traits::iterator::Iterator<Item = approx_chol::Clamped<'_>>
 pub fn approx_chol::Complement<T>::factor(self, approx_chol::Config, inflight::parallel::budget::Threads) -> approx_chol::ApproxInverse<T>
+pub fn approx_chol::Complement<T>::form(self, approx_chol::Config, inflight::parallel::budget::Threads) -> approx_chol::FormedComplement<T>
 pub fn approx_chol::Complement<T>::reduce_onto<I: num_traits::int::PrimInt + core::marker::Sync>(approx_chol::input::BipartiteFactorWidth2<'_, T, I>, approx_chol::input::Side, approx_chol::ScalingPolicy, inflight::parallel::budget::Threads) -> core::result::Result<Self, approx_chol::BuildError>
 impl<T: core::clone::Clone> core::clone::Clone for approx_chol::Complement<T>
 pub fn approx_chol::Complement<T>::clone(&self) -> Self
@@ -464,6 +465,12 @@ impl serde_core::ser::Serialize for approx_chol::Config
 pub fn approx_chol::Config::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Config
 pub fn approx_chol::Config::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct approx_chol::FormedComplement<T>
+impl<T: approx_chol::Real> approx_chol::FormedComplement<T>
+pub fn approx_chol::FormedComplement<T>::clamps(&self) -> impl core::iter::traits::iterator::Iterator<Item = approx_chol::Clamped<'_>>
+pub fn approx_chol::FormedComplement<T>::factor(self, inflight::parallel::budget::Threads) -> approx_chol::ApproxInverse<T>
+impl<T> core::fmt::Debug for approx_chol::FormedComplement<T>
+pub fn approx_chol::FormedComplement<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct approx_chol::Header
 pub approx_chol::Header::scalar: approx_chol::Scalar
 pub approx_chol::Header::version: u32

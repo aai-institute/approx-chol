@@ -15,18 +15,19 @@ use crate::sgdd::forest::Forest;
 use crate::sgdd::scaling::ScaleVector;
 use crate::sgdd::within_band;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
-use crate::{narrow, widen, BuildError, Index, Real};
+use crate::{narrow, widen, BuildError, Index, Real, Threads};
 
 /// How a shape's summed cells are stored, and its components found from them.
 pub(in crate::sgdd) trait AdjacencyLayout {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = OffDiagonal<T, I>> + Sync;
 
-    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
-    fn sum<T: Real, J: PrimInt, I: Index>(
+    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends, in order whatever `threads`.
+    fn sum<T: Real, J: PrimInt + Sync, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
+        threads: Threads,
     ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, BuildError>;
 }
 
@@ -79,11 +80,12 @@ impl AdjacencyLayout for StrictUpperTriangle {
 
     // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
     #[inline(always)]
-    fn sum<T: Real, J: PrimInt, I: Index>(
+    fn sum<T: Real, J: PrimInt + Sync, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         mut pair: impl FnMut(usize, usize, f64),
+        _: Threads,
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, BuildError> {
         let mut sets = Forest::<I, ()>::new(v.n());
         let rows = cells::upper::<T, J, I>(v, seen, |i, j, cell| {
@@ -100,13 +102,14 @@ impl AdjacencyLayout for StrictUpperTriangle {
 impl AdjacencyLayout for Biadjacency {
     type Adjacency<T: Real, I: Index> = Oriented<T, I>;
 
-    fn sum<T: Real, J: PrimInt, I: Index>(
+    fn sum<T: Real, J: PrimInt + Sync, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
+        threads: Threads,
     ) -> Result<Partitioned<Oriented<T, I>, I>, BuildError> {
-        let c = cells::cross(v, self.n_left, seen, pair)?;
+        let c = cells::cross(v, self.n_left, seen, pair, threads)?;
         let partition = Partition::of_bipartite(&c);
         let onto = self.onto;
         let a = Oriented { c, onto };
@@ -134,9 +137,16 @@ type IncidenceCells<'a, T, I, S> =
 type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
 
 /// Each pivot `Σ_j |c_ij| + σ_i`, screened in the assembly's own sums; `A`'s diagonal never stored.
-pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
+pub(in crate::sgdd) fn assemble_incidence<
+    'a,
+    T: Real,
+    J: PrimInt + Sync,
+    I: Index,
+    S: AdjacencyLayout,
+>(
     cells: S,
     v: FactorWidth2<'a, T, J>,
+    threads: Threads,
 ) -> Result<IncidenceCells<'a, T, I, S>, BuildError> {
     let mut abs = vec![0.0_f64; v.n()];
     let a = cells.sum(
@@ -145,6 +155,7 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
         |i, j, c: f64| {
             (abs[i], abs[j]) = (abs[i] + c.abs(), abs[j] + c.abs());
         },
+        threads,
     )?;
     let surplus = v.surplus();
     let s = |i: usize| surplus.map_or(0.0, |s| widen(s[i]));
@@ -193,12 +204,14 @@ fn rounded<'a, T: Real, I: Index>(
 }
 
 /// `A`'s cells, its diagonal `Σ_k w_k v_ik²` and its components, summed in one column pass.
-pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
+pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt + Sync, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: FactorWidth2<'_, T, J>,
+    threads: Threads,
 ) -> Result<ValueCells<T, I, S>, BuildError> {
     let mut sums = vec![0.0; v.n()];
-    let a = cells.sum::<T, J, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
+    let add = |column: &Column<T, I>| add_squares(&mut sums, column);
+    let a = cells.sum::<T, J, I>(v, add, |_, _, _| {}, threads)?;
     assembled(a, sums)
 }
 

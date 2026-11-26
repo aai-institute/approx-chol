@@ -244,6 +244,14 @@ impl<T: Real, I: Index> RowSums<T, I> {
         self.ptrs.push(self.indices.len());
     }
 
+    /// `part`'s rows after these.
+    fn append(&mut self, part: Self) {
+        let offset = self.indices.len();
+        self.ptrs.extend(part.ptrs[1..].iter().map(|&p| p + offset));
+        self.indices.extend(part.indices);
+        self.values.extend(part.values);
+    }
+
     /// Repeats the row just ended, slot `at`'s, on the other sheet, each column's sheet bit flipped, but for its twist, its edge to `at + 1`.
     fn mirror_row(&mut self, at: usize) {
         let (start, end) = (self.ptrs[self.ptrs.len() - 2], self.indices.len());
@@ -274,9 +282,35 @@ impl<T: Real, I: Index> SddRows<T, I> {
         }
     }
 
-    pub(super) fn row(&mut self, add: impl FnOnce(ColumnSums<'_, T, I>)) {
+    /// The next `len` rows, row `i` of them written by `row(sums, i)`; split by row across threads, at least `min_len` a task, so each sums alone and the bits match at any count.
+    pub(super) fn extend(
+        &mut self,
+        len: usize,
+        min_len: usize,
+        threads: Threads,
+        row: impl Fn(ColumnSums<'_, T, I>, usize) + Sync,
+    ) {
         let twists = self.route.twists(&self.ground);
-        self.rows.row(twists, self.rows.ptrs.len() - 1, add);
+        let first = self.rows.ptrs.len() - 1;
+        let Some(per) = threads.per_task(len, min_len) else {
+            for i in 0..len {
+                self.rows.row(twists, first + i, |sums| row(sums, i));
+            }
+            return;
+        };
+        let columns = self.rows.sums.len();
+        let parts: Vec<RowSums<T, I>> = (0..len)
+            .into_par_iter()
+            .with_min_len(per)
+            .fold(
+                || RowSums::new(columns),
+                |mut rows, i| {
+                    rows.row(twists, first + i, |sums| row(sums, i));
+                    rows
+                },
+            )
+            .collect();
+        parts.into_iter().for_each(|part| self.rows.append(part));
     }
 
     /// Rows of `n` vertices for `route`, one `ground` per vertex, `row` writing vertex `k`'s row once, `k⁺`'s on a cover, which `k⁻` mirrors; split by vertex across threads, at least `min_len` a task, so each sums alone and the bits match at any count.
@@ -308,10 +342,7 @@ impl<T: Real, I: Index> SddRows<T, I> {
                     .with_min_len(per)
                     .fold(|| RowSums::new(columns), add);
                 let rows = rows.reduce_with(|mut rows, part| {
-                    let offset = rows.indices.len();
-                    rows.ptrs.extend(part.ptrs[1..].iter().map(|&p| p + offset));
-                    rows.indices.extend(part.indices);
-                    rows.values.extend(part.values);
+                    rows.append(part);
                     rows
                 });
                 rows.unwrap_or_else(|| RowSums::new(columns))

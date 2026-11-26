@@ -9,14 +9,17 @@ use crate::{BuildError, Index, Real, Threads};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` an incidence matrix, so dominant by shape; across a bipartition it is `e_a + e_b`, summed switched.
-    pub(super) fn from_incidence<J: PrimInt, S: AdjacencyLayout>(
+    pub(super) fn from_incidence<J: PrimInt + Sync, S: AdjacencyLayout>(
         cells: S,
         v: FactorWidth2<'_, T, J>,
         threads: Threads,
     ) -> Result<Self, BuildError> {
-        assemble_incidence(cells, v)?.reduced(threads, |vertices, (off_diagonal, grounding), _| {
-            let m = Congruent::incidence(vertices, off_diagonal);
-            Ok(m.block(Balance::Balanced, grounding, ScaleVector::Identity, 0.0))
-        })
+        assemble_incidence(cells, v, threads)?.reduced(
+            threads,
+            |vertices, (off_diagonal, grounding), _| {
+                let m = Congruent::incidence(vertices, off_diagonal);
+                Ok(m.block(Balance::Balanced, grounding, ScaleVector::Identity, 0.0))
+            },
+        )
     }
 }
