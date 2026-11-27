@@ -110,6 +110,20 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         self.a.is_sorted()
     }
 
+    /// `A`'s diagonal `Σ_k w_k v_ik²` in `f64`, so a row of only underflowed terms fails the range screen.
+    pub(crate) fn diagonal<S: Index>(self) -> Vec<f64> {
+        let mut sums = vec![0.0; self.n()];
+        self.for_each_column::<S>(
+            #[inline(always)]
+            |column| {
+                // Two straight-line ends: a loop over them costs signed_F 7–10% and bip_sparse 18–20%.
+                sums[column.a.index()] += column.square(widen(column.v_a));
+                sums[column.b.index()] += column.square(widen(column.v_b));
+            },
+        );
+        sums
+    }
+
     /// Each column in order; write `visit` as `#[inline(always)] |column| …` (outlined: 1.6-1.9x).
     #[inline(always)]
     pub(crate) fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {

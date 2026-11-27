@@ -151,7 +151,7 @@ impl<T: Real, I: Index> Rows<T, I> {
     }
 
     /// `Σ|x|` in `f64`, row `i`'s at `i`, column `j`'s at `offset + j`: a row lands whole, after any column sharing its slot.
-    fn abs_sums(&self, offset: usize) -> Vec<f64> {
+    pub(crate) fn abs_sums(&self, offset: usize) -> Vec<f64> {
         let mut sums = vec![0.0; offset + self.n_cols];
         for i in 0..self.n_rows() {
             tally_abs(&mut sums, i, self.row(i).map(|(j, &x)| (offset + j, x)));
@@ -231,6 +231,11 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
 
     pub(crate) fn n(&self) -> usize {
         self.rows.n_rows()
+    }
+
+    /// Each vertex's `Σ_j |a_ij|` over both triangles, as [`Rows::abs_sums`] orders it.
+    pub(crate) fn abs_sums(&self) -> Vec<f64> {
+        self.rows.abs_sums(0)
     }
 
     pub(crate) fn nonpositive(&self) -> bool {

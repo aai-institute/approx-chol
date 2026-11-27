@@ -6,13 +6,12 @@ use crate::input::{Column, FactorWidth2};
 use crate::storage::Rows;
 use crate::{in_range, narrow, widen, BuildError, Index, Real};
 
-/// `A`'s strict upper triangle; `pair` sees each nonzero cell.
+/// `A`'s strict upper triangle; `pair` sees each nonzero cell's ends.
 pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
-    seen: impl FnMut(&Column<T, I>),
-    pair: impl FnMut(usize, usize, f64),
+    pair: impl FnMut(usize, usize),
 ) -> Result<Rows<T, I>, BuildError> {
-    let counts = counts::<T, J, I>(v, v.n(), seen);
+    let counts = counts::<T, J, I>(v, v.n());
     sum_cells::<T, J, I>(v, &counts, 0, pair)
 }
 
@@ -20,10 +19,8 @@ pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
 pub(super) fn cross<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     n_left: usize,
-    seen: impl FnMut(&Column<T, I>),
-    pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, BuildError> {
-    Accumulator::of::<T, I>(n_left, v.n() - n_left, v.n_columns()).cross(v, n_left, seen, pair)
+    Accumulator::of::<T, I>(n_left, v.n() - n_left, v.n_columns()).cross(v, n_left)
 }
 
 /// within's cap on the dense table, about 40 MB.
@@ -75,17 +72,15 @@ impl Accumulator {
         self,
         v: FactorWidth2<'_, T, J>,
         n_left: usize,
-        seen: impl FnMut(&Column<T, I>),
-        pair: impl FnMut(usize, usize, f64),
     ) -> Result<Rows<T, I>, BuildError> {
         // `?` per arm: returning the arms' results directly reshuffled the whole build's inlining.
         let a = match self {
-            Self::Table => dense_cross(v, n_left, seen, pair)?,
+            Self::Table => dense_cross(v, n_left)?,
             // Panels come sorted by their left side; reading them in place skips the buckets (−11–33% on within's 1M AKMs).
-            Self::Buckets if v.left_ends_ascend() => left_ascending(v, n_left, seen, pair)?,
+            Self::Buckets if v.left_ends_ascend() => left_ascending(v, n_left)?,
             Self::Buckets => {
-                let counts = counts::<T, J, I>(v, n_left, seen);
-                sum_cells::<T, J, I>(v, &counts, n_left, pair)?
+                let counts = counts::<T, J, I>(v, n_left);
+                sum_cells::<T, J, I>(v, &counts, n_left, |_, _| {})?
             }
         };
         Ok(a)
@@ -100,20 +95,16 @@ fn admit<T: Real>(i: usize, x: f64) -> Result<T, BuildError> {
         .ok_or(BuildError::OutOfRange { vertex: i })
 }
 
-/// `pair` sees each nonzero cell.
 fn dense_cross<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     n_left: usize,
-    mut seen: impl FnMut(&Column<T, I>),
-    mut pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, BuildError> {
     let n_right = v.n() - n_left;
     let mut table = vec![0.0_f64; n_left * n_right];
     v.for_each_column::<I>(
         #[inline(always)]
-        |column| {
+        |column: Column<T, I>| {
             table[column.a.index() * n_right + column.b.index() - n_left] += column.cell();
-            seen(&column);
         },
     );
     let mut ptrs = Vec::with_capacity(n_left + 1);
@@ -122,7 +113,6 @@ fn dense_cross<T: Real, J: PrimInt, I: Index>(
     for i in 0..n_left {
         let row = &table[i * n_right..][..n_right];
         for (j, &x) in row.iter().enumerate().filter(|&(_, &x)| x != 0.0) {
-            pair(i, n_left + j, x);
             indices.push(I::from_index(j));
             cells.push(admit::<T>(i, x)?);
         }
@@ -135,29 +125,24 @@ fn dense_cross<T: Real, J: PrimInt, I: Index>(
     Ok(Rows::new(ptrs, indices, cells, n_right))
 }
 
-/// Each row's cell count, a column's row its lower end, `seen` visiting each column once.
-fn counts<T: Real, J: PrimInt, I: Index>(
-    v: FactorWidth2<'_, T, J>,
-    n_rows: usize,
-    mut seen: impl FnMut(&Column<T, I>),
-) -> Vec<usize> {
+/// Each row's cell count, a column's row its lower end.
+fn counts<T: Real, J: PrimInt, I: Index>(v: FactorWidth2<'_, T, J>, n_rows: usize) -> Vec<usize> {
     let mut counts = vec![0; n_rows];
     v.for_each_column::<I>(
         #[inline(always)]
-        |column| {
+        |column: Column<T, I>| {
             counts[column.a.min(column.b).index()] += 1;
-            seen(&column);
         },
     );
     counts
 }
 
-/// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each nonzero cell.
+/// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each nonzero cell's ends.
 fn sum_cells<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     counts: &[usize],
     first_column: usize,
-    mut pair: impl FnMut(usize, usize, f64),
+    mut pair: impl FnMut(usize, usize),
 ) -> Result<Rows<T, I>, BuildError> {
     let starts: Vec<usize> = std::iter::once(0)
         .chain(counts.iter().scan(0, |end, &count| {
@@ -200,7 +185,7 @@ fn sum_cells<T: Real, J: PrimInt, I: Index>(
         for &j in &touched {
             let cell = std::mem::take(&mut sums[j.index()]);
             if cell != 0.0 {
-                pair(i, first_column + j.index(), cell);
+                pair(i, first_column + j.index());
                 columns[out] = j;
                 cells[out] = widen(admit::<T>(i, cell)?);
                 out += 1;
@@ -223,8 +208,6 @@ fn sum_cells<T: Real, J: PrimInt, I: Index>(
 fn left_ascending<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     n_left: usize,
-    mut seen: impl FnMut(&Column<T, I>),
-    mut pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, BuildError> {
     let n_cols = v.n() - n_left;
     let mut row = OpenRow::new(n_cols);
@@ -234,11 +217,10 @@ fn left_ascending<T: Real, J: PrimInt, I: Index>(
     let mut values = Vec::with_capacity(v.n_columns());
     let mut done = Ok(());
     let mut close = |row: &mut OpenRow<I>, ptrs: &mut Vec<usize>| {
-        // A failed drain leaves its row's sums behind; later rows would emit them to `pair`.
+        // The first failed drain stands: a later row would overwrite it.
         if done.is_ok() {
             let i = ptrs.len() - 1;
             done = row.drain(|j, cell| {
-                pair(i, n_left + j.index(), cell);
                 columns.push(j);
                 values.push(admit::<T>(i, cell)?);
                 Ok(())
@@ -248,8 +230,7 @@ fn left_ascending<T: Real, J: PrimInt, I: Index>(
     };
     v.for_each_column::<I>(
         #[inline(always)]
-        |column| {
-            seen(&column);
+        |column: Column<T, I>| {
             while ptrs.len() <= column.a.index() {
                 close(&mut row, &mut ptrs);
             }
@@ -327,24 +308,14 @@ mod tests {
     use super::*;
     use crate::input::{BipartiteFactorWidth2, FactorWidth1};
 
-    /// Rows (or error), `seen` and `pair` from the table and the buckets.
+    /// Rows (or error) from the table and the buckets.
     fn table_and_buckets<T: Real>(v: FactorWidth2<'_, T, u32>, n_left: usize) -> [Summed; 2] {
         [Accumulator::Table, Accumulator::Buckets].map(|accumulator| {
-            let (mut seen, mut pairs) = (Vec::new(), Vec::new());
-            let rows = accumulator.cross::<T, u32, u32>(
-                v,
-                n_left,
-                |column| seen.push((column.a, column.b, column.cell())),
-                |i, j, cell| pairs.push((i, j, cell)),
-            );
-            (rows.map(|rows| format!("{rows:?}")), seen, pairs)
+            let rows = accumulator.cross::<T, u32, u32>(v, n_left);
+            rows.map(|rows| format!("{rows:?}"))
         })
     }
-    type Summed = (
-        Result<String, BuildError>,
-        Vec<(u32, u32, f64)>,
-        Vec<(usize, usize, f64)>,
-    );
+    type Summed = Result<String, BuildError>;
 
     fn filling(cells: usize) -> usize {
         cells.div_ceil(DENSE_TABLE_CELLS_PER_COLUMN)
@@ -418,7 +389,7 @@ mod tests {
         }
     }
 
-    /// Ascending left ends, a row cancelling to zero and rows with no cell: read in place, the rows, `seen` and `pair` match the table's.
+    /// Ascending left ends, a row cancelling to zero and rows with no cell: read in place, the rows match the table's.
     #[test]
     fn ascending_rows_read_in_place_sum_as_the_table() {
         let left = [0, 0, 0, 2, 2, 2, 5, 5, 6, 6, 9];
@@ -437,7 +408,7 @@ mod tests {
         assert_eq!(table, in_place);
     }
 
-    /// Row 0 overflows `f32` at its second column: read in place, the error and the cells `pair` saw match the table's, so no later row emits row 0's leftover sums.
+    /// Row 0 overflows `f32` at its second column: read in place, the error is the table's, not a later row's.
     #[test]
     fn an_overflowing_row_stops_in_place_as_in_the_table() {
         let left = [0, 0, 0, 1, 2];
@@ -453,7 +424,7 @@ mod tests {
         .lower();
         assert!(gram.left_ends_ascend());
         let [table, in_place] = table_and_buckets(gram, n_left);
-        assert_eq!(in_place.0, Err(BuildError::OutOfRange { vertex: 0 }));
+        assert_eq!(in_place, Err(BuildError::OutOfRange { vertex: 0 }));
         assert_eq!(table, in_place);
     }
 
@@ -469,7 +440,7 @@ mod tests {
         )
         .unwrap();
         let rows = Accumulator::Table
-            .cross::<f64, u32, u32>(gram.lower(), 4, |_| {}, |_, _, _| {})
+            .cross::<f64, u32, u32>(gram.lower(), 4)
             .unwrap();
         assert!(rows.holds_no_slack());
     }
