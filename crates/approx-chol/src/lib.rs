@@ -182,7 +182,7 @@ fn lane_sum<T: Real>(x: &[T], scale: f64) -> f64 {
     })
 }
 
-/// `Σ term(i, x_i)` as [`Sum2`] gives it; serial below 20 terms, where the measured lane setup and merge cost more than they save.
+/// `Σ term(i, x_i)` within [`Sum2`]'s bound; serial below 20 terms, ORO's Algorithm 4.4 itself, where the measured lane setup and merge cost more than they save.
 fn compensated_sum<X: Copy, W: Batch<f64>>(x: &[X], term: impl Fn(usize, X) -> W) -> W {
     // Outlined, so a short sum's caller spills no lane state.
     #[inline(never)]
@@ -220,7 +220,7 @@ fn pass_threads(values: usize, threads: Threads) -> Threads {
     }
 }
 
-/// [`compensated_sum`] up to [`SUM_CHUNK`] terms; past it, halves cut at chunk boundaries summed apart, each lane's partial sums merged by TwoSum: one tree for every thread count.
+/// [`compensated_sum`] up to [`SUM_CHUNK`] terms; past it, halves cut at chunk boundaries summed apart, each lane's partial sums merged by TwoSum: one tree for every thread count, within [`Sum2`]'s bound.
 fn chunked_sum<X: Copy + Sync, W: Batch<f64>>(
     x: &[X],
     term: impl Fn(usize, X) -> W + Sync,
@@ -236,7 +236,9 @@ fn chunked_sum<X: Copy + Sync, W: Batch<f64>>(
     threads.fold_tree(blocks, leaf, merge).total()
 }
 
-/// Ogita–Rump–Oishi Sum2 (SISC 26(6), 2005) in eight fixed TwoSum lanes: off by at most `ε|Σx| + (nε)² Σ|x|`.
+/// Ogita–Rump–Oishi Sum2 (SISC 26(6), 2005) in eight fixed TwoSum lanes: `n` terms land within `u|Σx| + γ²ₙ₋₁ Σ|x|` of their sum, `u = 2⁻⁵³` (`f64::EPSILON / 2`), `γₖ = ku/(1 − ku)`, Prop. 4.5's bound.
+///
+/// Prop. 4.5 is proved for one cascade; the proof holds for the tree the lanes, merges and final fold make. The sum plus every TwoSum error is exact (4.2). An error is at most `u` times its TwoSum's sum (3.2), a float sum of the terms below it, so at most `u(1 + γₙ₋₁)` times their magnitudes (2.4). A term lies below at most `n − 1` TwoSums that join terms on both sides; the others add a padded or starting zero, exactly. So the errors total at most `(n − 1)u(1 + γₙ₋₁) Σ|x| = γₙ₋₁ Σ|x|`, (4.4) for a tree; the carries sum them in any order within `γₙ₋₂` of that (2.4), and (4.12) finishes unchanged.
 #[derive(Clone, Copy)]
 struct Sum2<W = f64> {
     sums: [W; 8],
@@ -365,9 +367,10 @@ mod tests {
         };
         let values: Vec<f64> = (0..n).map(|i| term(i * stride % n)).collect();
         let exact = triples as f64;
-        let epsilon = f64::EPSILON;
+        let u = f64::EPSILON / 2.0;
+        let gamma = (n - 1) as f64 * u / (1.0 - (n - 1) as f64 * u);
         let magnitude: f64 = values.iter().map(|x| x.abs()).sum();
-        let bound = epsilon * exact + (n as f64 * epsilon).powi(2) * magnitude;
+        let bound = u * exact + gamma * gamma * magnitude;
         assert!(
             (values.iter().sum::<f64>() - exact).abs() > bound,
             "plain sum is within the bound"

@@ -310,7 +310,7 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         rows.abs_sums(offset).into_iter().map(narrow).collect()
     }
 
-    /// [`abs_row_sums`](Self::abs_row_sums) as [`Sum2`] gives them, off by `(u + γ²_{k/8})Σ` at degree `k`, in `f64`.
+    /// [`abs_row_sums`](Self::abs_row_sums) as [`Sum2`] gives them, off by `(u + γ²_{k−1})Σ` at degree `k`, in `f64`.
     pub(crate) fn compensated_abs_row_sums(&self) -> Vec<f64> {
         let (rows, offset) = self.stored();
         let mirror = rows.transpose();
