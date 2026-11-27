@@ -9,7 +9,7 @@ use num_traits::PrimInt;
 use super::partition::Partition;
 use super::{Entries, LonePivot, Partitioned, PrincipalBlocks, RowSums};
 use crate::diagonal_in_range;
-use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
+use crate::input::{BipartiteFactorWidth2, FactorWidth2, Side};
 use crate::sgdd::block::Grounding;
 use crate::sgdd::forest::Forest;
 use crate::sgdd::scaling::ScaleVector;
@@ -21,13 +21,14 @@ use crate::{narrow, widen, BuildError, Index, Real};
 pub(in crate::sgdd) trait AdjacencyLayout {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = OffDiagonal<T, I>> + Sync;
 
-    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
+    /// The summed cells and their components.
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
-        seen: impl FnMut(&Column<T, I>),
-        pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, BuildError>;
+
+    /// Each vertex's `Σ_j |a_ij|`, read from the summed cells as every `Σ_j |a_ij|` is.
+    fn abs_sums<T: Real, I: Index>(a: &Self::Adjacency<T, I>) -> Vec<f64>;
 }
 
 /// A general `V`'s cells: `A`'s strict upper triangle.
@@ -82,18 +83,17 @@ impl AdjacencyLayout for StrictUpperTriangle {
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
-        seen: impl FnMut(&Column<T, I>),
-        mut pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, BuildError> {
         let mut sets = Forest::<I, ()>::new(v.n());
-        let rows = cells::upper::<T, J, I>(v, seen, |i, j, cell| {
-            sets.union(i, j);
-            pair(i, j, cell);
-        })?;
+        let rows = cells::upper::<T, J, I>(v, |i, j| sets.union(i, j))?;
         Ok(Partitioned {
             a: UpperAdjacency::new(rows),
             partition: sets.into_partition(),
         })
+    }
+
+    fn abs_sums<T: Real, I: Index>(a: &UpperAdjacency<T, I>) -> Vec<f64> {
+        a.abs_sums()
     }
 }
 
@@ -103,14 +103,16 @@ impl AdjacencyLayout for Biadjacency {
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
-        seen: impl FnMut(&Column<T, I>),
-        pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Oriented<T, I>, I>, BuildError> {
-        let c = cells::cross(v, self.n_left, seen, pair)?;
+        let c = cells::cross(v, self.n_left)?;
         let partition = Partition::of_bipartite(&c);
         let onto = self.onto;
         let a = Oriented { c, onto };
         Ok(Partitioned { a, partition })
+    }
+
+    fn abs_sums<T: Real, I: Index>(a: &Oriented<T, I>) -> Vec<f64> {
+        a.c.abs_sums(a.c.n_rows())
     }
 }
 
@@ -138,20 +140,13 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
     cells: S,
     v: FactorWidth2<'a, T, J>,
 ) -> Result<IncidenceCells<'a, T, I, S>, BuildError> {
-    let mut abs = vec![0.0_f64; v.n()];
-    let a = cells.sum(
-        v,
-        |_| {},
-        |i, j, c: f64| {
-            (abs[i], abs[j]) = (abs[i] + c.abs(), abs[j] + c.abs());
-        },
-    )?;
+    let Partitioned { a, partition } = cells.sum(v)?;
+    let abs = S::abs_sums(&a);
     let surplus = v.surplus();
     let s = |i: usize| surplus.map_or(0.0, |s| widen(s[i]));
     if let Some(vertex) = (0..abs.len()).find(|&i| !diagonal_in_range(narrow::<T>(abs[i] + s(i)))) {
         return Err(BuildError::OutOfRange { vertex });
     }
-    let Partitioned { a, partition } = a;
     let surplus = surplus.map(|s| rounded(s, &abs, &partition));
     let a = Dominant {
         adjacency: a,
@@ -192,22 +187,13 @@ fn rounded<'a, T: Real, I: Index>(
     kept
 }
 
-/// `A`'s cells, its diagonal `Σ_k w_k v_ik²` and its components, summed in one column pass.
+/// `A`'s diagonal from `V`, then its cells and their components.
 pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: FactorWidth2<'_, T, J>,
 ) -> Result<ValueCells<T, I, S>, BuildError> {
-    let mut sums = vec![0.0; v.n()];
-    let a = cells.sum::<T, J, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
-    assembled(a, sums)
-}
-
-/// Adds `w v²` at both ends, so a row of only underflowed terms fails the range screen.
-#[inline(always)]
-fn add_squares<T: Real, I: Index>(sums: &mut [f64], column: &Column<T, I>) {
-    // Two straight-line ends: a loop over them costs signed_F 7–10% and bip_sparse 18–20%.
-    sums[column.a.index()] += column.square(widen(column.v_a));
-    sums[column.b.index()] += column.square(widen(column.v_b));
+    let diagonal = v.diagonal::<I>();
+    assembled(cells.sum::<T, J, I>(v)?, diagonal)
 }
 
 /// The diagonal is each sum as `T` stores it; a nonzero one cast to zero underflowed, so it is out of range.
