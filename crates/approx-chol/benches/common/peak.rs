@@ -1,4 +1,4 @@
-//! The bench's global allocator, counting live bytes and their peak.
+//! The global allocator of the peak benches and the frees test, counting live bytes and their peak.
 #![allow(unsafe_code)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -46,4 +46,13 @@ pub fn peak_while<R>(run: impl FnOnce() -> R) -> (R, usize) {
     PEAK.store(before, Ordering::SeqCst);
     let result = run();
     (result, PEAK.load(Ordering::SeqCst) - before)
+}
+
+/// Bytes live now.
+#[allow(
+    dead_code,
+    reason = "the benches read peaks; the frees test also reads what stays"
+)]
+pub fn live() -> usize {
+    LIVE.load(Ordering::SeqCst)
 }

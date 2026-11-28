@@ -70,6 +70,8 @@ use spread::{Coupled, Room};
 
 impl<T: Real> ApproxInverse<T> {
     /// Factors every coupled summand in parallel, each keyed by its vertices once they are `order`'s.
+    ///
+    /// It takes `packed` for memory, as LAPACK's `DPOTRF` gives up `A` to its factor ("On exit, … the factor U or L", LAPACK 3.12 reference documentation), though not in place: each summand is moved into its task, and what its factor does not keep (all but its congruence) is freed once it is factored, so no factored block's input is held beside the factor. With many blocks the peak stays near the larger of the reduction's bytes and the factor's: `tests/factor_frees_its_input.rs` holds it within a quarter of the smaller for [`Sgdd`] and [`Complement`], where inputs held to the end would add all of it. One large block's peak is its elimination's.
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
         packed: Packed<B, T>,
         config: &Config,
