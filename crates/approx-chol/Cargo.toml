@@ -13,7 +13,7 @@ categories.workspace = true
 # A nested workspace nothing in the published crate reads.
 exclude = ["fuzz"]
 
-# The workspace's, but unsafe code denied, not forbidden: the counting allocators of a test and the benches allow it.
+# The workspace's, but unsafe code denied, not forbidden: the counting allocators of two tests and the benches allow it.
 [lints.rust]
 unsafe_code = "deny"
 

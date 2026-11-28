@@ -111,7 +111,7 @@ impl<T: Real> Sgdd<T> {
 
     /// Factors each block under `threads`; clone first to factor again under another `config`.
     ///
-    /// It takes the reduction for memory, as LAPACK's `DPOTRF` gives up `A` to its factor ("On exit, … the factor U or L", LAPACK 3.12 reference documentation), though not in place: each block's input is freed once that block is factored, so no factored block's input is held beside the factor. With many blocks the peak is about the factor's (`reduce_peak`, `1000x2000`, CSR: a 149–153 MB peak at 1 to 12 threads beside a 96 MB reduction and a 148 MB factor); one large block's peak is its elimination's.
+    /// It takes the reduction for memory, as LAPACK's `DPOTRF` gives up `A`: each block's input is freed once that block is factored, so the peak stays near the larger of reduction and factor rather than their sum.
     pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T> {
         self.0.factor(&config, threads)
     }
@@ -137,7 +137,7 @@ impl<T: Real> Complement<T> {
         self.0.clamps()
     }
 
-    /// Forms each block's complement under [`Config::complement`] and factors it under `threads`; the factor's vertex `k` is the kept side's `k`-th.
+    /// Forms each block's complement under [`Config::complement`] and factors it under `threads`, each block's input freed once that block is factored, as [`Sgdd::factor`] frees it; the factor's vertex `k` is the kept side's `k`-th.
     pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T> {
         self.0.factor(&config, threads)
     }
