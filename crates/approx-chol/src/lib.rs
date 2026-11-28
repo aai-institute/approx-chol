@@ -182,23 +182,22 @@ fn lane_sum<T: Real>(x: &[T], scale: f64) -> f64 {
     })
 }
 
-/// `Σ term(i, x_i)` within [`Sum2`]'s bound; serial below 20 terms, ORO's Algorithm 4.4 itself, where the measured lane setup and merge cost more than they save.
+/// `Σ term(i, x_i)` within [`Sum2`]'s bound; serial below [`SUM2_MIN_TERMS`], ORO's Algorithm 4.4 itself.
 fn compensated_sum<X: Copy, W: Batch<f64>>(x: &[X], term: impl Fn(usize, X) -> W) -> W {
     // Outlined, so a short sum's caller spills no lane state.
     #[inline(never)]
     fn lanes<X: Copy, W: Batch<f64>>(x: &[X], term: impl Fn(usize, X) -> W) -> W {
         Sum2::of(x, term).total()
     }
-    if x.len() >= 20 {
+    if x.len() >= SUM2_MIN_TERMS {
         return lanes(x, term);
     }
-    let terms = x.iter().enumerate().map(|(i, &x)| term(i, x));
-    let (sum, carry) = terms.fold((W::zero(), W::zero()), |(sum, carry), x| {
-        let (sum, error) = two_sum(sum, x);
-        (sum, carry.add(error))
-    });
+    let (sum, carry) = cascade(W::zero(), x.iter().enumerate().map(|(i, &x)| term(i, x)));
     sum.add(carry)
 }
+
+/// Terms from which [`compensated_sum`] sums in [`Sum2`]'s lanes: below, the lane setup and merge cost more than they save. One right-hand side, M2 Max, medians of 11: lanes took 1.28× the serial time at 18 terms, 1.15× at 20, 1.03× at 22, 0.77× at 24 and 0.27× at 1024. Part of every sum's bits: moving it changes the sums of the lengths it passes over.
+const SUM2_MIN_TERMS: usize = 20;
 
 /// `units` per task so each carries `2^bits` of `work`, at least one; `bits` below 64.
 fn grain(units: usize, work: u64, bits: u32) -> usize {
@@ -301,15 +300,19 @@ impl<W: Batch<f64>> Sum2<W> {
     }
 
     fn total(&self) -> W {
-        let first = (self.sums[0], W::zero());
-        let (sum, carry) = self.sums[1..].iter().fold(first, |(sum, carry), &x| {
-            let (sum, error) = two_sum(sum, x);
-            (sum, carry.add(error))
-        });
+        let (sum, carry) = cascade(self.sums[0], self.sums[1..].iter().copied());
         // From `−0`, as `Iterator::sum` starts, so a zero keeps its sign.
         let carries = (self.carries.iter()).fold(W::zero().neg(), |total, &c| total.add(c));
         sum.add(carry.add(carries))
     }
+}
+
+/// `start` and `terms` added by TwoSum in order, and their errors added apart: ORO's cascade (Algorithm 4.4 before its last addition).
+fn cascade<W: Batch<f64>>(start: W, terms: impl Iterator<Item = W>) -> (W, W) {
+    terms.fold((start, W::zero()), |(sum, carry), x| {
+        let (sum, error) = two_sum(sum, x);
+        (sum, carry.add(error))
+    })
 }
 
 /// `a + b` and its rounding error, exactly (Knuth's TwoSum).
